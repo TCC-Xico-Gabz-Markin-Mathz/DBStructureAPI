@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from api.models.columnModels import ColumnModel
+from api.structure.models.columnModels import ColumnModel
 
 
 class TableModel(BaseModel):

@@ -1,11 +1,9 @@
 from api.dependencies import get_api_key
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Security
-from api.routes import db_structure
+from api.structure.routes import db_structure
 
-app = FastAPI(
-    dependencies=[Security(get_api_key)]
-)
+app = FastAPI(dependencies=[Security(get_api_key)])
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,6 +14,7 @@ app.add_middleware(
 )
 
 app.include_router(db_structure.router)
+
 
 @app.get("/")
 def read_root():
