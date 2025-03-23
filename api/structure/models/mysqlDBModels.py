@@ -11,5 +11,11 @@ class DatabaseModel(BaseModel):
 
 
 class UpdateDBTablesQuery(BaseModel):
-    id: PydanticObjectId = Field(alias="_id")
-    name: str
+    db_id: PydanticObjectId
+    db_name: str
+
+
+class InterfaceQueryRequest(BaseModel):
+    db_id: PydanticObjectId
+    db_name: str
+    order: str
