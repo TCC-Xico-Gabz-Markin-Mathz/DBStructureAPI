@@ -44,9 +44,6 @@ def interface_request(
     )
 
     payload = {"order": data.order, "result": str(database_response)}
-    print(payload)
     response = rag_client.post("/rag/query/interpreter", payload)
-
-    print(response)
 
     return response
