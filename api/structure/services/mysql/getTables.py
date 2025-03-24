@@ -24,6 +24,7 @@ def getTables(database: str) -> None | list[TableModel]:
                         COLUMN_KEY, 
                         IS_NULLABLE, 
                         COLUMN_TYPE, 
+                        COLUMN_KEY,
                         COLUMN_DEFAULT, 
                         EXTRA
                     FROM INFORMATION_SCHEMA.COLUMNS 
@@ -43,6 +44,7 @@ def getTables(database: str) -> None | list[TableModel]:
                         WHERE TABLE_SCHEMA = '{database}' AND TABLE_NAME = '{table_name}' AND COLUMN_NAME = '{col["COLUMN_NAME"]}' 
                         AND REFERENCED_TABLE_NAME IS NOT NULL;
                     """)
+                print(col)
                 foreign_key = cursor.fetchone()
 
                 if foreign_key:
