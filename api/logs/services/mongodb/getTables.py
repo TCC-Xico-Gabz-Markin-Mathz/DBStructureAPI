@@ -6,9 +6,8 @@ def get_db_structure(db_id: PydanticObjectId):
     try:
         mongodb = MongoDB()
         collection = mongodb.collection
-        query_filter = {"_id": db_id}
 
-        result = collection.find_one(query_filter)
+        result = collection.find()
         return result
     except Exception as e:
         raise e

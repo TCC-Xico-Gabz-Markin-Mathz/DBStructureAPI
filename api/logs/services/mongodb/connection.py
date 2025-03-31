@@ -12,7 +12,6 @@ class MongoDB:
         return cls._instance
 
     def _initialize(self):
-        MONGO_URI = f"mongodb://{os.getenv('MONGODB_USER')}:{os.getenv('MONGODB_PASSWORD')}@{os.getenv('MONGODB_HOST')}/{os.getenv('MONGODB_DATABASE')}?authSource=admin"
         self.client = pymongo.MongoClient("mongodb://localhost:27017/")
-        self.database = self.client[os.getenv("MONGODB_DATABASE")]
-        self.collection = self.database[os.getenv("MONGODB_COLLECTION")]
+        self.database = self.client[os.getenv("query_logs")]
+        self.collection = self.database[os.getenv("queries")]

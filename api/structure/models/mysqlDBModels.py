@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from api.structure.helpers.objectid import PydanticObjectId
+from api.common.helpers.objectid import PydanticObjectId
 from api.structure.models.tableModels import TableModel
 
 
