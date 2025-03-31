@@ -1,4 +1,3 @@
-import os
 import pymongo
 
 
@@ -13,5 +12,5 @@ class MongoDB:
 
     def _initialize(self):
         self.client = pymongo.MongoClient("mongodb://localhost:27017/")
-        self.database = self.client[os.getenv("query_logs")]
-        self.collection = self.database[os.getenv("queries")]
+        self.database = self.client["query_logs"]
+        self.collection = self.database["queries"]
