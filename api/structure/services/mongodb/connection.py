@@ -13,6 +13,6 @@ class MongoDB:
 
     def _initialize(self):
         MONGO_URI = f"mongodb://{os.getenv('MONGODB_USER')}:{os.getenv('MONGODB_PASSWORD')}@{os.getenv('MONGODB_HOST')}/{os.getenv('MONGODB_DATABASE')}?authSource=admin"
-        self.client = pymongo.MongoClient("mongodb://localhost:27017/")
+        self.client = pymongo.MongoClient(MONGO_URI)
         self.database = self.client[os.getenv("MONGODB_DATABASE")]
         self.collection = self.database[os.getenv("MONGODB_COLLECTION")]
