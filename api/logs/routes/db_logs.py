@@ -48,7 +48,7 @@ def analyze_log(log: Dict) -> List[str]:
 
 
 @router.get("/")
-def update_db_structure():
+def analyse_logs():
     logs = get_db_logs()
     analysis_results = []
 
