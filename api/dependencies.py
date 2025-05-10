@@ -6,6 +6,7 @@ from starlette.exceptions import HTTPException
 from starlette.status import HTTP_403_FORBIDDEN
 
 from api.common.services.rag import RAGClient
+from api.optimization.service.mySqlInstance import MySQLTestInstance
 
 load_dotenv()
 
@@ -26,3 +27,10 @@ rag_client_instance = RAGClient()
 
 def get_rag_client():
     return rag_client_instance
+
+
+mysql_instance_singleton = MySQLTestInstance()
+
+
+def get_mysql_instance():
+    return mysql_instance_singleton
