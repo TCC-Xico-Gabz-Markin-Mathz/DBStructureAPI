@@ -63,7 +63,6 @@ class MySQLTestInstance:
         return result
 
     def delete_instance(self):
-        print(self.container)
         if self.container:
             print("Verificando o status do container...")
             try:
@@ -84,6 +83,19 @@ class MySQLTestInstance:
             self.conn.close()
             self.conn = None
 
+    def execute_sql_statements(self, statements: list[str]):
+        if not self.conn:
+            raise Exception("Não há conexão com o banco de dados!")
+
+        self.cursor = self.conn.cursor()
+        for stmt in statements:
+            try:
+                print(f"Executando: {stmt}...")
+                self.cursor.execute(stmt)
+            except mysql.connector.Error as err:
+                print(f"Erro ao executar comando: {err}")
+        self.conn.commit()
+
     def run_test(self):
         """Executa o teste de criação, conexão e deleção da instância do MySQL."""
         try:
@@ -95,3 +107,16 @@ class MySQLTestInstance:
         finally:
             # Deletar a instância após o teste
             self.delete_instance()
+
+    def execute_raw_query(self, query: str):
+        print(f"Executando: {query}...")
+        if not self.conn:
+            raise Exception("Sem conexão com o banco.")
+
+        self.cursor = self.conn.cursor()
+        self.cursor.execute(query)
+        try:
+            result = self.cursor.fetchall()
+            return result
+        except mysql.connector.InterfaceError:
+            return "Query executada com sucesso (sem retorno)"

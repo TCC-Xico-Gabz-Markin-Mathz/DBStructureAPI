@@ -234,3 +234,36 @@ def format_database_create(data, debug=False):
     ]
 
     return create_statements
+
+
+def format_sql_commands(sql_string):
+    """
+    Extrai apenas os comandos SQL de uma string que contém um array Python de comandos
+
+    Args:
+        sql_string (str): String contendo um array Python de comandos SQL
+
+    Returns:
+        list: Lista de comandos SQL prontos para execução
+    """
+    # Localiza o início e fim do array na string
+    start_idx = sql_string.find("[")
+    end_idx = sql_string.rfind("]")
+
+    if start_idx == -1 or end_idx == -1 or start_idx >= end_idx:
+        # Se não encontrar os delimitadores do array, retorna erro
+        return ["-- Erro: Não foi possível identificar um array na string de entrada"]
+
+    # Extrai apenas o conteúdo do array
+    array_content = sql_string[start_idx : end_idx + 1]
+
+    # Converte a string do array em uma lista real
+    import ast
+
+    try:
+        sql_commands = ast.literal_eval(array_content)
+    except (SyntaxError, ValueError) as e:
+        return [f"-- Erro ao processar o array SQL: {str(e)}"]
+
+    # Retorna os comandos limpos
+    return [cmd.strip() for cmd in sql_commands if cmd.strip()]
