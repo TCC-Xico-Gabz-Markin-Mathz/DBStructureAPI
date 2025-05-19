@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
 
 from api.common.services.rag import RAGClient
 from api.dependencies import get_mysql_instance, get_rag_client
@@ -39,18 +38,23 @@ def optimize_query(
     mysql_instance.start_instance()
     mysql_instance.execute_sql_statements(create_statements)
 
-    # 4. ask to rag to populate the db
+    # 4. ask to rag and populate the db
     payload_populate = {"creation_command": string_structure, "number_insertions": 5}
     response_populate = rag_client.post("/optimizer/populate", payload_populate)
     populate_statements = format_sql_commands(response_populate["sql"])
-    # print(populate_statements)
     mysql_instance.execute_sql_statements(populate_statements)
 
     # 5. execute the original query
     result = mysql_instance.execute_raw_query(data.query)
     print("Resultado da query original:", result)
 
-    # 6. Delete test instance
+    # 6. execute optimizations
+
+    # 7. execute optimized query
+
+    # 8. Compare logs
+
+    # 9. Delete test instance
     mysql_instance.delete_instance()
 
     return {
@@ -59,28 +63,3 @@ def optimize_query(
     }
 
     return None
-
-
-class TestCommands(BaseModel):
-    test_a_command: str
-    test_b_command: str
-
-
-# Endpoint para criar a instância e rodar os testes
-@router.post("/create_and_test")
-async def create_and_test(mysql_instance=Depends(get_mysql_instance)):
-    # Executar o teste (só criar e testar a conexão)
-    test_results = mysql_instance.start_instance()
-
-    # Retornar resultados
-    return {
-        "message": "Teste de criação e conexão concluído",
-        "test_results": test_results,
-    }
-
-
-# Endpoint para deletar a instância
-@router.delete("/delete_instance")
-async def delete_instance(mysql_instance=Depends(get_mysql_instance)):
-    mysql_instance.delete_instance()
-    return {"message": "Instância MySQL removida com sucesso"}

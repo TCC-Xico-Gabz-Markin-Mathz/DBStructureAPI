@@ -3,70 +3,131 @@ import ast
 
 
 def format_result(data):
+    import re
+    import ast
+
     content = data.get("result", "")
+
+    # Se o conteúdo for uma string representando uma lista, tratamos diretamente
+    if (
+        isinstance(content, str)
+        and content.strip().startswith("[")
+        and content.strip().endswith("]")
+    ):
+        # Tratamento específico para o padrão que você compartilhou
+        content_str = content.strip()
+
+        # Divide pelo padrão específico que você mostrou
+        # Exemplo: ["SQL1", "SQL2", "SQL3"]
+        queries = []
+        # Remove colchetes externos
+        content_str = content_str.strip("[]")
+
+        # Divide a string em pontos onde temos padrões de separação como ', ' ou '",
+        pattern = r"(?:\'|\")(.*?)(?:\'|\")(?:,|\s|$)"
+        matches = re.findall(pattern, content_str)
+
+        if matches:
+            for match in matches:
+                query = match.strip()
+                if query:
+                    # Limpa padrões de escape e formatting
+                    query = re.sub(r"\\\'\%\\\'", "%", query)
+                    query = re.sub(r"\\\'\%(.*?)\%\\\'", r"%\1%", query)
+                    query = query.replace("\\n", "\n").replace("\\t", "\t")
+
+                    # Verifica se a query termina com ponto e vírgula
+                    if not query.endswith(";"):
+                        query += ";"
+
+                    queries.append(query)
+
+            # Se encontramos queries, retornamos diretamente
+            if queries:
+                return queries
+
+    # Se não conseguimos tratar diretamente, continuamos com o algoritmo original
 
     # Remove blocos de markdown
     clean_content = re.sub(
         r"```(?:python)?\n?|```", "", content, flags=re.IGNORECASE
     ).strip()
 
-    # Primeira etapa: Normalizar as strings SQL
+    # Função para normalizar strings SQL
     def fix_sql_escaping(sql_string):
         # Remove sequências problemáticas como \'%\' e substitui por %
         sql_string = re.sub(r"\\\'\%\\\'", "%", sql_string)
-
         # Para padrões como \'%\'texto\'%\' -> '%texto%'
         sql_string = re.sub(r"\\\'\%(.*?)\%\\\'", r'"%\1%"', sql_string)
-
         # Para formato "%texto%" -> '%texto%'
         sql_string = re.sub(r'"%(.+?)%"', r"'%\1%'", sql_string)
-
         return sql_string
 
+    # Trata o caso específico do exemplo que você mencionou
+    if "SELECT posts.*, users.*, comments.*, likes.*" in clean_content:
+        # Divide o conteúdo com base no padrão observado
+        parts = clean_content.split("',")
+        queries = []
+
+        for part in parts:
+            query = part.strip().strip("'").strip('"').strip()
+            if query:
+                # Limpa sequências problemáticas
+                query = re.sub(r"\\\'\%\\\'", "%", query)
+                query = re.sub(r"\\\'\%(.*?)\%\\\'", r"%\1%", query)
+                # Adiciona ponto-e-vírgula se necessário
+                if not query.endswith(";"):
+                    query += ";"
+                queries.append(query)
+
+        # Verifica se obtivemos queries válidas
+        if queries:
+            # Trata especificamente o caso de "Verificando o status do container..." no final
+            last_query = queries[-1]
+            if "Verificando o status do container" in last_query:
+                # Separa a query SQL da mensagem de status
+                parts = last_query.split("Verificando")
+                if parts[0].strip():
+                    # Adiciona apenas a parte SQL
+                    queries[-1] = parts[0].strip()
+                    # Pode ser necessário adicionar novamente o ponto-e-vírgula
+                    if not queries[-1].endswith(";"):
+                        queries[-1] += ";"
+
+            return queries
+
+    # Tentativas usando ast.literal_eval
     try:
         queries_list = ast.literal_eval(clean_content)
         if isinstance(queries_list, list):
-            fixed_queries = [fix_sql_escaping(q) for q in queries_list]
-            return fixed_queries
+            return [fix_sql_escaping(q) for q in queries_list]
     except Exception as e:
         print(f"Normalização direta falhou: {e}")
 
-    # Tenta primeiro com ast.literal_eval diretamente
     try:
         queries = ast.literal_eval(clean_content)
         return [q.strip() for q in queries]
     except Exception as e:
         print(f"Primeiro método falhou: {e}")
 
-        # Segunda tentativa: preprocessa o texto para lidar com aspas não escapadas
         try:
-            # Substitui aspas duplas não escapadas dentro da string por aspas simples escapadas
             processed_content = re.sub(r'("%)(.+?)(%")', r"'%\2%'", clean_content)
-
-            # Tenta novamente com o conteúdo processado
             queries = ast.literal_eval(processed_content)
             return [q.strip() for q in queries]
         except Exception as e:
             print(f"Segundo método falhou: {e}")
 
-            # Terceira tentativa: Remove sequências problemáticas de escape
             try:
-                # Remove sequências de escape problemáticas
                 fixed_content = re.sub(r"\\\'\%\\\'", "'%'", clean_content)
                 fixed_content = re.sub(r"\\\'\%(.*?)\%\\\'", r"'%\1%'", fixed_content)
-
                 queries = ast.literal_eval(fixed_content)
                 return [q.strip() for q in queries]
             except Exception as e:
                 print(f"Terceiro método falhou: {e}")
 
-                # Quarta tentativa: Extração manual de quotes
+                # Extração manual de quotes
                 try:
-                    # Remove colchetes externos
                     content_no_brackets = clean_content.strip("[]")
-
-                    # Divide com base em padrões de separação de string SQL
-                    # Procura por coisas como: ', ' ou ", " que separam itens na lista
                     queries = []
                     current = ""
                     in_quote = False
@@ -125,7 +186,7 @@ def format_result(data):
                 except Exception as e:
                     print(f"Quarta tentativa falhou: {e}")
 
-                    # Como último recurso, usar uma abordagem simplificada de parsing
+                    # Última tentativa com abordagem simplificada
                     try:
                         content_no_brackets = clean_content.strip("[]")
                         # Tenta extrair strings baseadas em padrões de SQL
@@ -143,12 +204,11 @@ def format_result(data):
                         if queries:
                             return queries
                         else:
-                            # Última tentativa - dividir pelos delimitadores mais comuns
+                            # Dividir pelos delimitadores mais comuns
                             simple_split = content_no_brackets.split("', '")
-                            queries = [
+                            return [
                                 q.strip().strip("'").strip('"') for q in simple_split
                             ]
-                            return queries
                     except Exception as e:
                         print(f"Todas as tentativas falharam: {e}")
                         return []
