@@ -1,3 +1,4 @@
+import os
 import docker
 import mysql.connector
 import time
@@ -23,6 +24,12 @@ class MySQLTestInstance:
                 "MYSQL_DATABASE": self.db_name,  # Nome do banco de dados
             },
             ports={"3306/tcp": 3307},  # Mapear a porta 3306
+            volumes={
+                f"{os.path.abspath('my.cnf')}": {
+                    "bind": "/etc/mysql/conf.d/my.cnf",
+                    "mode": "ro",
+                }
+            },
             detach=True,
             remove=True,
         )
@@ -92,8 +99,13 @@ class MySQLTestInstance:
             try:
                 print(f"Executando: {stmt}...")
                 self.cursor.execute(stmt)
+
+                if self.cursor.with_rows:
+                    self.cursor.fetchall()
+
             except mysql.connector.Error as err:
                 print(f"Erro ao executar comando: {err}")
+
         self.conn.commit()
 
     def run_test(self):
@@ -117,6 +129,7 @@ class MySQLTestInstance:
         self.cursor.execute(query)
         try:
             result = self.cursor.fetchall()
+            self.conn.commit()
             return result
         except mysql.connector.InterfaceError:
             return "Query executada com sucesso (sem retorno)"

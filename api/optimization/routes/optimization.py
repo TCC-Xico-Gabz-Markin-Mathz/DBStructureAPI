@@ -4,7 +4,6 @@ from api.common.services.rag import RAGClient
 from api.dependencies import get_mysql_instance, get_rag_client
 from api.optimization.helpers.formatResult import (
     format_database_create,
-    format_result,
     format_sql_commands,
 )
 from api.optimization.models.optimize import OptimizeQueryRequest
@@ -27,7 +26,7 @@ def optimize_query(
     # 1. ask to rag to generate the optimization
     payload_generate = {"database_structure": string_structure, "query": data.query}
     response_generate = rag_client.post("/optimizer/generate", payload_generate)
-    formatted_queries = format_result(response_generate)
+    formatted_queries = response_generate["result"]
 
     # 2. ask to rag to generate the command
     payload_create = {"database_structure": string_structure}
@@ -48,11 +47,40 @@ def optimize_query(
     result = mysql_instance.execute_raw_query(data.query)
     print("Resultado da query original:", result)
 
-    # 6. execute optimizations
+    # 6. execute optimizations and optimized query
+    mysql_instance.execute_sql_statements(formatted_queries)
 
-    # 7. execute optimized query
-
-    # 8. Compare logs
+    # 7. Compare logs
+    pc = mysql_instance.execute_raw_query("""
+        SELECT 
+            SQL_TEXT, 
+            TIMER_WAIT / 1000000000000 AS EXECUTION_TIME_SECONDS,
+            TIMER_START,
+            NO_INDEX_USED,
+            NO_GOOD_INDEX_USED,
+            CPU_TIME,
+            MAX_TOTAL_MEMORY,
+            ROWS_SENT,
+            ROWS_EXAMINED
+        FROM 
+            performance_schema.events_statements_history
+        WHERE 
+            SQL_TEXT IS NOT NULL
+        ORDER BY 
+            TIMER_START ASC;
+    """)
+    select_logs = [log for log in pc if log[0].strip().lower().startswith("select")]
+    for log in select_logs:
+        print(f"Query: {log[0]}")
+        print(f"Execution Time (s): {log[1]}")
+        print(f"Timer Start: {log[2]}")
+        print(f"No Index Used: {log[3]}")
+        print(f"No Good Index Used: {log[4]}")
+        print(f"CPU Time: {log[5]}")
+        print(f"Max Total Memory: {log[6]}")
+        print(f"Rows Sent: {log[7]}")
+        print(f"Rows Examined: {log[8]}")
+        print("-" * 40)
 
     # 9. Delete test instance
     mysql_instance.delete_instance()
@@ -61,5 +89,3 @@ def optimize_query(
         "optimized_queries": formatted_queries,
         "query_result": result,
     }
-
-    return None
