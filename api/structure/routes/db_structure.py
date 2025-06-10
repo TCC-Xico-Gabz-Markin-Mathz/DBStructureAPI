@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends
+
+from api.common.helpers.objectid import PydanticObjectId
 from api.common.services.rag import RAGClient
 from api.dependencies import get_rag_client
 from api.structure.helpers.formatSqlQuery import format_sql_query
@@ -17,8 +19,17 @@ from api.structure.services.mongodb.updateTables import update_db_structure as u
 
 router = APIRouter(prefix="/db_structure", tags=["db_structure"])
 
-
 @router.post("/")
+def create_db_structure(db_name: str) -> DatabaseModel:
+    tables: list[TableModel] = getTables(database=f"{db_name}")
+
+    database = DatabaseModel(_id=PydanticObjectId(), name=db_name, tables=tables)
+
+    update_db(database)
+
+    return database
+
+@router.put("/")
 def update_db_structure(query: UpdateDBTablesQuery) -> DatabaseModel:
     tables: list[TableModel] = getTables(database=f"{query.db_name}")
 

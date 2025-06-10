@@ -11,6 +11,6 @@ class MongoDB:
         return cls._instance
 
     def _initialize(self):
-        self.client = pymongo.MongoClient("mongodb://localhost:27017/")
+        self.client = pymongo.MongoClient("mongodb://root:example@mongo:27017/")
         self.database = self.client["teste"]
         self.collection = self.database["dbstructure"]
