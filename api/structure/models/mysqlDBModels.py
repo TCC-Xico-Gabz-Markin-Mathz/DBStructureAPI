@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from api.common.helpers.objectid import PydanticObjectId
 from api.structure.models.tableModels import TableModel
 
