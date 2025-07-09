@@ -1,7 +1,3 @@
-import re
-import ast
-
-
 def format_result(data):
     import re
     import ast
@@ -212,88 +208,6 @@ def format_result(data):
                     except Exception as e:
                         print(f"Todas as tentativas falharam: {e}")
                         return []
-
-
-def format_database_create(data, debug=False):
-    """
-    Processa e formata comandos SQL CREATE TABLE a partir de blocos SQL em markdown.
-
-    Args:
-        data (dict): Dicionário contendo a chave 'sql' com comandos SQL em formato markdown
-        debug (bool, optional): Flag para habilitar mensagens de debug. Padrão False.
-
-    Returns:
-        list: Lista de strings contendo os comandos CREATE TABLE formatados
-    """
-    content = data.get("sql", "")
-    if debug:
-        print("SQL original:", content)
-
-    # Remove blocos de markdown SQL
-    clean_content = re.sub(r"```sql\n?|```", "", content, flags=re.IGNORECASE).strip()
-
-    # Divide os comandos CREATE TABLE pelo ponto e vírgula seguido de uma nova linha
-    create_statements = []
-
-    # Primeiro tenta encontrar padrões CREATE TABLE completos
-    create_pattern = re.compile(
-        r"CREATE\s+TABLE\s+\w+\s*\([^;]*\);", re.IGNORECASE | re.DOTALL
-    )
-    matches = create_pattern.findall(clean_content)
-
-    if matches:
-        # Se encontrou padrões completos, usa-os
-        for match in matches:
-            # Limpa e formata cada comando CREATE TABLE
-            statement = match.strip()
-            # Certifica-se de que termina com ponto e vírgula
-            if not statement.endswith(";"):
-                statement += ";"
-            create_statements.append(statement)
-    else:
-        # Se não encontrou padrões completos, divide pelo ponto e vírgula
-        raw_statements = clean_content.split(";")
-        for stmt in raw_statements:
-            stmt = stmt.strip()
-            if stmt and stmt.upper().startswith("CREATE TABLE"):
-                # Certifica-se de que termina com ponto e vírgula
-                if not stmt.endswith(";"):
-                    stmt += ";"
-                create_statements.append(stmt)
-
-    # Se ainda não encontrou nada, tenta uma abordagem mais simples
-    if not create_statements:
-        if debug:
-            print("Tentando método alternativo de extração...")
-
-        # Divide por CREATE TABLE e reconstrói cada comando
-        parts = re.split(r"(CREATE\s+TABLE\s+)", clean_content, flags=re.IGNORECASE)
-        current_statement = ""
-        for i, part in enumerate(parts):
-            if i > 0 and part.strip().upper() == "CREATE TABLE":
-                if current_statement:
-                    # Finaliza o comando anterior (se existir)
-                    if not current_statement.endswith(";"):
-                        current_statement += ";"
-                    create_statements.append(current_statement.strip())
-                current_statement = part
-            else:
-                current_statement += part
-
-        # Adiciona o último comando (se existir)
-        if current_statement and "CREATE TABLE" in current_statement.upper():
-            if not current_statement.endswith(";"):
-                current_statement += ";"
-            create_statements.append(current_statement.strip())
-
-    # Remove possíveis comandos vazios ou inválidos
-    create_statements = [
-        stmt
-        for stmt in create_statements
-        if stmt.strip() and "CREATE TABLE" in stmt.upper()
-    ]
-
-    return create_statements
 
 
 def format_sql_commands(sql_string):
