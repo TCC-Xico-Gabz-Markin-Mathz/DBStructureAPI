@@ -20,6 +20,8 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_DATABASE: teste
+    volumes:
+      - ./my.cnf:/etc/mysql/my.cnf:ro
     ports:
       - "3306:3306"
     networks:
