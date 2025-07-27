@@ -1,5 +1,5 @@
 from fastapi import HTTPException
-from api.structure.services.mysql.connection import MySQL
+from api.common.services.mysql.connection import MySQL
 from mysql.connector.abstracts import MySQLCursorAbstract
 
 

@@ -12,8 +12,8 @@ from api.structure.models.mysqlDBModels import (
 )
 from api.structure.models.tableModels import TableModel
 from api.structure.services.mongodb.getTables import get_db_structure
-from api.structure.services.mysql.executeQuery import execute_sql_query
-from api.structure.services.mysql.getTables import getTables
+from api.common.services.mysql.executeQuery import execute_sql_query
+from api.common.services.mysql.getTables import getTables
 from api.structure.services.mongodb.updateTables import update_db_structure as update_db
 
 

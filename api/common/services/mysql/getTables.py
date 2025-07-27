@@ -1,7 +1,7 @@
 from mysql.connector.abstracts import MySQLCursorAbstract
 from api.structure.models.columnModels import ColumnModel
 from api.structure.models.tableModels import TableModel
-from api.structure.services.mysql.connection import MySQL
+from api.common.services.mysql.connection import MySQL
 
 
 def getTables(database: str) -> None | list[TableModel]:
