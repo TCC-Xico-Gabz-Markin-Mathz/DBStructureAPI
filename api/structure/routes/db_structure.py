@@ -58,3 +58,12 @@ def interface_request(
     response = rag_client.post("/rag/query/interpreter", payload)
 
     return response
+
+
+
+@router.post("/weights/{db_id}")
+def interface_request(
+    data: InterfaceQueryRequest, rag_client: RAGClient = Depends(get_rag_client)
+):
+    # HERE I WILL SEND ALL DATA TO LLM DECIDES THE WEIGHT, AND SAVE ON MONGO WITH THE NORMALIZED QUERY
+    pass
