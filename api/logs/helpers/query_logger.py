@@ -21,7 +21,7 @@ def log_query_execution_times(exclude_connection_queries=True):
     cursor = mysql.connection.cursor()
 
     # Conectar ao MongoDB
-    mongo_client = MongoClient("mongodb://root:example@mongo:27017/")
+    mongo_client = MongoClient("mongodb://root:example@localhost:27017/")
     mongo_db = mongo_client["teste"]
     collection = mongo_db["queries"]
 
@@ -72,7 +72,7 @@ def log_query_execution_times(exclude_connection_queries=True):
                 # Preparar o log detalhado da query
                 query_log = {
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "sql_text": sql_text,
+                    "sql_text": normalize_sql(sql_text),
                     "query_type": query_type,
                     "execution_time_seconds": execution_time,
                     "execution_time_milliseconds": execution_time * 1000,
@@ -102,6 +102,23 @@ def log_query_execution_times(exclude_connection_queries=True):
         cursor.close()
         mysql.close_connection()
         mongo_client.close()
+
+
+def normalize_sql(query: str) -> str:
+    # Patterns para normalizar:
+    patterns = [
+        r"'(?:''|[^'])*'",             # strings entre aspas simples (com escape '')
+        r'"(?:\\"|[^"])*"',            # strings entre aspas duplas (com escape \")
+        r'\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)?\b',  # datas ISO 8601
+        r'\b\d+\.\d+\b',               # números float
+        r'\b\d+\b',                   # números inteiros
+        r'\bTRUE\b|\bFALSE\b',         # booleanos
+    ]
+    
+    for pattern in patterns:
+        query = re.sub(pattern, '?', query, flags=re.IGNORECASE)
+    
+    return query
 
 
 def identify_query_type(sql_text):
