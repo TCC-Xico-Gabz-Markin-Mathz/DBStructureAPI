@@ -1,9 +1,9 @@
-from api.logs.services.mongodb.connection import MongoDB
+from api.common.services.mongo.connection import MongoDB
 
 
 def get_db_logs():
     try:
-        mongodb = MongoDB()
+        mongodb = MongoDB("queries")
         collection = mongodb.collection
 
         result = list(collection.find())

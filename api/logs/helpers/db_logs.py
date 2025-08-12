@@ -1,4 +1,5 @@
-from api.logs.helpers.query_logger import log_query_execution_times
+from api.logs.scripts.query_logger import log_query_execution_times
+
 
 def analyse_logs():
     print("Creating logs...")

@@ -1,11 +1,12 @@
 from api.common.helpers.objectid import PydanticObjectId
-from api.structure.services.mongodb.connection import MongoDB
 from bson import ObjectId
+
+from api.common.services.mongo.connection import MongoDB
 
 
 def get_db_structure(db_id: PydanticObjectId):
     try:
-        mongodb = MongoDB()
+        mongodb = MongoDB("dbstructure")
         collection = mongodb.collection
         query_filter = {"_id": ObjectId(db_id)}
 

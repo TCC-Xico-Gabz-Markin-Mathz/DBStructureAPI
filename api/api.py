@@ -14,9 +14,11 @@ app = FastAPI(dependencies=[Security(get_api_key)])
 scheduler.add_job(analyse_logs, CronTrigger(second=3))
 scheduler.start()
 
+
 @atexit.register
 def shutdown():
     scheduler.shutdown()
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,6 +30,7 @@ app.add_middleware(
 
 app.include_router(db_structure.router)
 app.include_router(optimization.router)
+
 
 @app.get("/")
 def read_root():
