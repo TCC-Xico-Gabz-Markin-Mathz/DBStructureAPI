@@ -1,83 +1,63 @@
+import os
 import docker
 import mysql.connector
 import time
 
 
 class MySQLTestInstance:
-    def __init__(
-        self,
-        root_password="root123",
-        db_name="testdb",
-        container_name="mysql-test-instance",
-    ):
+    def __init__(self, root_password="root123", db_name="testdb"):
         self.db_name = db_name
         self.root_password = root_password
-        self.container_name = container_name
         self.container = None
         self.conn = None
         self.cursor = None
 
     def start_instance(self):
-        """Inicia o container MySQL na porta 33060."""
+        """Inicia o container MySQL e aguarda o MySQL estar pronto."""
         client = docker.from_env()
-        print("Verificando se o container de teste já existe...")
-        try:
-            # Tenta encontrar e remover um container com o mesmo nome
-            existing_container = client.containers.get(self.container_name)
-            print(f"Container '{self.container_name}' encontrado. Removendo...")
-            existing_container.remove(force=True)
-            time.sleep(2)  # Pequena pausa para garantir a remoção
-        except docker.errors.NotFound:
-            print(
-                f"Nenhum container com o nome '{self.container_name}' encontrado. Prosseguindo..."
-            )
-        except docker.errors.APIError as e:
-            print(
-                f"Erro ao tentar remover o container: {e}. Prosseguindo com a criação..."
-            )
-
-        print("Iniciando o container MySQL na porta 33060...")
+        print("Iniciando o container MySQL...")
         self.container = client.containers.run(
-            "mysql:5.7",  # MySQL 5.7 é mais rápido que 8.0
-            name=self.container_name,
+            "mysql:8",  # Imagem do MySQL 8
+            name="mysql-test-instance",
             environment={
                 "MYSQL_ROOT_PASSWORD": self.root_password,
-                "MYSQL_DATABASE": self.db_name,
+                "MYSQL_DATABASE": self.db_name,  # Nome do banco de dados
             },
-            ports={"3306/tcp": 33060},  # ← Mapeia para porta 33060
+            ports={"3306/tcp": 3307},  # Mapear a porta 3306
+            volumes={
+                f"{os.path.abspath('my.cnf')}": {
+                    "bind": "/etc/mysql/conf.d/my.cnf",
+                    "mode": "ro",
+                }
+            },
             detach=True,
             remove=True,
         )
-        print("Container MySQL iniciado. Aguardando inicialização...")
+        # Espera para garantir que o MySQL esteja inicializado
+        print("Aguardando MySQL iniciar...")
         self.wait_for_mysql()
 
     def wait_for_mysql(self):
-        """Aguarda MySQL estar pronto na porta 33060"""
-        print("Aguardando MySQL inicializar...")
-        time.sleep(30)  # MySQL 5.7 ainda precisa de tempo para inicializar
-
-        retries = 15
-        for i in range(retries):
+        """Função para garantir que o MySQL esteja pronto para conexão"""
+        retries = 10
+        for _ in range(retries):
             try:
-                print(f"Tentativa {i + 1}/{retries} - Conectando em localhost:33060...")
+                # Tentativa de conectar ao MySQL
+                print("Tentando conectar ao MySQL...")
                 self.conn = mysql.connector.connect(
-                    host="localhost",
-                    port=33060,  # ← Usa porta 33060
+                    host="mysql-test-instance",
+                    port=3307,
                     user="root",
                     password=self.root_password,
                     database=self.db_name,
-                    connect_timeout=30,
-                    autocommit=True,
                 )
-                print("✅ Conexão MySQL estabelecida na porta 33060!")
+                print("Conexão bem-sucedida!")
                 return
             except mysql.connector.Error as err:
-                print(f"❌ Erro: {err}")
-                time.sleep(10)  # Aguarda 10 segundos entre tentativas
+                print(f"Erro ao conectar: {err}")
+                time.sleep(10)  # Espera de 5 segundos antes de tentar novamente
 
-        raise Exception(
-            "Não foi possível conectar ao MySQL na porta 33060 após várias tentativas"
-        )
+        raise Exception("Não foi possível conectar ao MySQL após várias tentativas")
 
     def test_connection(self):
         if not self.conn:
