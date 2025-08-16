@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from api.common.services.rag import RAGClient
 from api.dependencies import get_mysql_instance, get_rag_client
@@ -14,9 +14,12 @@ router = APIRouter(prefix="/optimize", tags=["optimization"])
 def optimize_query(
     data: OptimizeQueryRequest,
     rag_client: RAGClient = Depends(get_rag_client),
+    db_id: str = Query(..., description="Database ID"),
     mysql_instance=Depends(get_mysql_instance),
 ):
-    database_structure = get_db_structure("65ff3a7b8f1e4b23d4a9c1d2")
+    # Use db_id or fallback to default if None/empty to get structure
+    actual_db_id = db_id or "65ff3a7b8f1e4b23d4a9c1d2"
+    database_structure = get_db_structure(actual_db_id)
     string_structure = convert_db_structure_to_string(database_structure)
 
     # 1. ask to rag to generate the optimization
