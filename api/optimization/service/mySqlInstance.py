@@ -15,6 +15,15 @@ class MySQLTestInstance:
     def start_instance(self):
         """Inicia o container MySQL e aguarda o MySQL estar pronto."""
         client = docker.from_env()
+
+        try:
+            old = client.containers.get("mysql-test-instance")
+            print("Container antigo encontrado. Removendo...")
+            old.stop()
+            old.remove(force=True)
+        except docker.errors.NotFound:
+            pass  # não existia, segue tranquilo
+
         print("Iniciando o container MySQL...")
         self.container = client.containers.run(
             "mysql:8",  # Imagem do MySQL 8
