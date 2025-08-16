@@ -6,7 +6,10 @@ from api.optimization.helpers.formatResult import (
     format_sql_commands,
 )
 from api.optimization.models.optimize import OptimizeQueryRequest
-from api.structure.helpers.mongoToString import convert_db_structure_to_string
+from api.structure.helpers.mongoToString import (
+    convert_db_structure_to_string,
+    schema_to_create_tables,
+)
 from api.structure.services.mongodb.getTables import get_db_structure
 
 
@@ -37,85 +40,95 @@ def optimize_query(
 
     # 3. create the test instance
     mysql_instance.start_instance()
-    mysql_instance.execute_sql_statements(create_statements)
 
-    # 4. ask to rag and populate the db
-    payload_populate = {"creation_command": string_structure, "number_insertions": 5}
-    response_populate = rag_client.post("/optimizer/populate", payload_populate)
-    populate_statements = format_sql_commands(response_populate["sql"])
-    mysql_instance.execute_sql_statements(populate_statements)
+    try:
+        mysql_instance.execute_sql_statements(create_statements)
 
-    # 5. execute the original query
-    result = mysql_instance.execute_raw_query(data.query)
-    print("Resultado da query original:", result)
+        # 4. ask to rag and populate the db
+        payload_populate = {
+            "creation_commands": schema_to_create_tables(database_structure),
+            "number_insertions": 10,
+        }
+        response_populate = rag_client.post("/optimizer/populate", payload_populate)
+        populate_statements = format_sql_commands(response_populate)
+        mysql_instance.execute_sql_statements(populate_statements)
 
-    # 6. execute optimizations and optimized query
-    mysql_instance.execute_sql_statements(formatted_queries)
+        # 5. execute the original query
+        result = mysql_instance.execute_raw_query(data.query)
+        print("Resultado da query original:", result)
 
-    # 7. Compare logs
-    pc = mysql_instance.execute_raw_query("""
-        SELECT 
-            SQL_TEXT, 
-            TIMER_WAIT / 1000000000000 AS EXECUTION_TIME_SECONDS,
-            TIMER_START,
-            NO_INDEX_USED,
-            NO_GOOD_INDEX_USED,
-            CPU_TIME,
-            MAX_TOTAL_MEMORY,
-            ROWS_SENT,
-            ROWS_EXAMINED
-        FROM 
-            performance_schema.events_statements_history
-        WHERE 
-            SQL_TEXT IS NOT NULL
-        ORDER BY 
-            TIMER_START ASC;
-    """)
-    select_logs = [log for log in pc if log[0].strip().lower().startswith("select")]
+        # 6. execute optimizations and optimized query
+        mysql_instance.execute_sql_statements(formatted_queries)
 
-    if len(select_logs) >= 2:
-        original_log = select_logs[0]
-        optimized_log = select_logs[1]
+        # 7. Compare logs
+        pc = mysql_instance.execute_raw_query("""
+            SELECT 
+                SQL_TEXT, 
+                TIMER_WAIT / 1000000000000 AS EXECUTION_TIME_SECONDS,
+                TIMER_START,
+                NO_INDEX_USED,
+                NO_GOOD_INDEX_USED,
+                CPU_TIME,
+                MAX_TOTAL_MEMORY,
+                ROWS_SENT,
+                ROWS_EXAMINED
+            FROM 
+                performance_schema.events_statements_history
+            WHERE 
+                SQL_TEXT IS NOT NULL
+            ORDER BY 
+                TIMER_START ASC;
+        """)
+        select_logs = [log for log in pc if log[0].strip().lower().startswith("select")]
 
-        def convert_metrics(log):
-            return {
-                "execution_time_seconds": float(log[1]) if log[1] is not None else None,
-                "timer_start": float(log[2]) if log[2] is not None else None,
-                "no_index_used": bool(log[3]) if log[3] is not None else None,
-                "no_good_index_used": bool(log[4]) if log[4] is not None else None,
-                "cpu_time": float(log[5]) if log[5] is not None else None,
-                "max_total_memory": float(log[6]) if log[6] is not None else None,
-                "rows_sent": int(log[7]) if log[7] is not None else None,
-                "rows_examined": int(log[8]) if log[8] is not None else None,
-            }
+        if len(select_logs) >= 2:
+            original_log = select_logs[0]
+            optimized_log = select_logs[1]
 
-        original_metrics = convert_metrics(original_log)
-        optimized_metrics = convert_metrics(optimized_log)
-        original_query = original_log[0]
-        optimized_query = optimized_log[0]
-    else:
-        original_metrics = optimized_metrics = {}
-        original_query = optimized_query = ""
+            def convert_metrics(log):
+                return {
+                    "execution_time_seconds": float(log[1])
+                    if log[1] is not None
+                    else None,
+                    "timer_start": float(log[2]) if log[2] is not None else None,
+                    "no_index_used": bool(log[3]) if log[3] is not None else None,
+                    "no_good_index_used": bool(log[4]) if log[4] is not None else None,
+                    "cpu_time": float(log[5]) if log[5] is not None else None,
+                    "max_total_memory": float(log[6]) if log[6] is not None else None,
+                    "rows_sent": int(log[7]) if log[7] is not None else None,
+                    "rows_examined": int(log[8]) if log[8] is not None else None,
+                }
 
-    # 8. Analyse with RAG
-    response_analyze = rag_client.post(
-        "/optimizer/analyze",
-        {
-            "original_metrics": original_metrics,
-            "optimized_metrics": optimized_metrics,
-            "original_query": original_query,
-            "optimized_query": optimized_query,
-            "applied_indexes": formatted_queries
-            if isinstance(formatted_queries, list)
-            else [formatted_queries],
-        },
-    )
+            original_metrics = convert_metrics(original_log)
+            optimized_metrics = convert_metrics(optimized_log)
+            original_query = original_log[0]
+            optimized_query = optimized_log[0]
+        else:
+            original_metrics = optimized_metrics = {}
+            original_query = optimized_query = ""
 
-    # 9. Delete test instance
-    mysql_instance.delete_instance()
+        # 8. Analyse with RAG
+        response_analyze = rag_client.post(
+            "/optimizer/analyze",
+            {
+                "original_metrics": original_metrics,
+                "optimized_metrics": optimized_metrics,
+                "original_query": original_query,
+                "optimized_query": optimized_query,
+                "applied_indexes": formatted_queries
+                if isinstance(formatted_queries, list)
+                else [formatted_queries],
+            },
+        )
 
-    return {
-        "analyze": response_analyze,
-        "optimized_queries": formatted_queries,
-        "query_result": result,
-    }
+        return {
+            "analyze": response_analyze,
+            "optimized_queries": formatted_queries,
+            "query_result": result,
+        }
+
+    except Exception as e:
+        print(f"Error during query optimization: {e}")
+        raise
+    finally:
+        mysql_instance.delete_instance()

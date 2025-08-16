@@ -11,6 +11,7 @@ class MongoDB:
         return cls._instance
 
     def _initialize(self):
-        self.client = pymongo.MongoClient("mongodb://root:example@mongo:27017/")
+        uri = "mongodb://mongo:65c5294460aa71e75831@147.93.185.41:27017/teste?authSource=admin&tls=false"
+        self.client = pymongo.MongoClient(uri)
         self.database = self.client["teste"]
         self.collection = self.database["dbstructure"]
