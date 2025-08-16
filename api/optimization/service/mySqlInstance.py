@@ -59,6 +59,7 @@ class MySQLTestInstance:
                     user="root",
                     password=self.root_password,
                     database=self.db_name,
+                    network="easypanel-tcc",
                 )
                 print("Conexão bem-sucedida!")
                 return
