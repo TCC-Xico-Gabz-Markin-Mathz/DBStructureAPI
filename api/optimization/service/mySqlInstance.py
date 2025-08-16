@@ -3,6 +3,12 @@ import docker
 import mysql.connector
 import time
 import socket
+import subprocess
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class MySQLTestInstance:
@@ -12,302 +18,309 @@ class MySQLTestInstance:
         self.container = None
         self.conn = None
         self.cursor = None
-        self.assigned_port = 3307  # Porta padrão, pode ser alterada dinamicamente
+        self.port = None
 
-    def start_instance(self):
-        """Inicia o container MySQL e aguarda o MySQL estar pronto - Adaptado para EasyPanel."""
-        # Verificar se Docker socket existe antes de tentar conectar
-        if not os.path.exists("/var/run/docker.sock"):
-            print("ERRO CRÍTICO: Docker socket não encontrado!")
-            print("SOLUÇÃO NECESSÁRIA no EasyPanel:")
-            print("1. Vá em sua aplicação no EasyPanel")
-            print("2. Clique em 'Edit Application'")
-            print("3. Vá para 'Advanced' → 'Mounts'")
-            print("4. Adicione um novo mount:")
-            print("   - Host Path: /var/run/docker.sock")
-            print("   - Container Path: /var/run/docker.sock")
-            print("   - Type: bind")
-            print("5. Redeploy a aplicação")
-            raise FileNotFoundError(
-                "Docker socket não está montado. Siga as instruções acima."
-            )
+        # Check environment
+        self.check_environment()
 
+    def check_environment(self):
+        """Check if we're running in a server environment like EasyPanel"""
+        self.is_server_environment = self._detect_server_environment()
+        logger.info(f"Server environment detected: {self.is_server_environment}")
+
+    def _detect_server_environment(self):
+        """Detect if running on server vs local"""
+        indicators = [
+            not os.path.exists("/Applications"),  # Not macOS
+            os.path.exists("/etc/systemd"),  # Systemd (Linux server)
+            os.environ.get("EASYPANEL_ENV"),  # EasyPanel specific
+            os.environ.get("DOCKER_HOST"),  # Remote Docker
+        ]
+        return any(indicators)
+
+    def find_available_port(self, start_port=33306):
+        """Find available port, starting from higher range for servers"""
+        base_port = start_port if self.is_server_environment else 3307
+
+        for port in range(base_port, base_port + 50):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    # Try to bind to 0.0.0.0 for server environments
+                    bind_host = "0.0.0.0" if self.is_server_environment else "localhost"
+                    s.bind((bind_host, port))
+                    logger.info(f"Found available port: {port}")
+                    return port
+            except OSError as e:
+                logger.debug(f"Port {port} in use: {e}")
+                continue
+
+        raise Exception("No available ports found")
+
+    def check_docker_access(self):
+        """Check Docker daemon access"""
         try:
             client = docker.from_env()
-            print("Iniciando o container MySQL no EasyPanel...")
+            client.ping()
+            logger.info("✅ Docker daemon accessible")
+            return True
+        except docker.errors.DockerException as e:
+            logger.error(f"❌ Docker access failed: {e}")
 
-            # Verificar se Docker está acessível
+            # Try to diagnose the issue
             try:
-                client.ping()
-                print("Docker daemon acessível.")
-            except Exception as e:
-                print(f"ERRO: Docker daemon não acessível: {e}")
-                print(
-                    "O socket existe mas não consegue conectar. Verifique permissões."
+                result = subprocess.run(
+                    ["docker", "ps"], capture_output=True, text=True
                 )
-                raise
+                if result.returncode != 0:
+                    logger.error(f"Docker CLI error: {result.stderr}")
+                    logger.info(
+                        "💡 Try: sudo usermod -aG docker $USER && newgrp docker"
+                    )
+            except Exception:
+                logger.error("Docker CLI not available")
 
-            # Limpar container existente
-            try:
-                existing_container = client.containers.get("mysql-test-instance")
-                print("Container existente encontrado, removendo...")
-                existing_container.stop(timeout=10)
-                existing_container.remove()
-                time.sleep(3)
-            except docker.errors.NotFound:
-                print("Nenhum container existente encontrado.")
-            except Exception as e:
-                print(f"Aviso ao remover container: {e}")
+            return False
 
-            # Verificar se a porta está disponível
-            if self._is_port_available(3307):
-                self.assigned_port = 3307
-            elif self._is_port_available(3308):
-                self.assigned_port = 3308
-            else:
-                # Deixar Docker escolher uma porta aleatória
-                self.assigned_port = None
+    def cleanup_existing_containers(self, force=True):
+        """Enhanced cleanup for server environments"""
+        try:
+            client = docker.from_env()
 
-            print(f"Usando porta: {self.assigned_port or 'automática'}")
+            # Find containers by name pattern
+            containers = client.containers.list(
+                all=True, filters={"name": "mysql-test"}
+            )
 
-            # Configurar volumes apenas se my.cnf existir
-            volumes = {}
-            config_path = os.path.abspath("my.cnf")
-            if os.path.exists(config_path):
-                print(f"Usando configuração personalizada: {config_path}")
-                volumes = {
-                    config_path: {
-                        "bind": "/etc/mysql/conf.d/my.cnf",
-                        "mode": "ro",
-                    }
-                }
-            else:
-                print("Arquivo my.cnf não encontrado, usando configuração padrão.")
+            for container in containers:
+                logger.info(f"Cleaning up container: {container.name}")
+                try:
+                    if container.status == "running":
+                        container.stop(timeout=5)
+                    container.remove(force=force)
+                except Exception as e:
+                    logger.warning(f"Error removing {container.name}: {e}")
 
-            # Criar container com configurações adaptadas para EasyPanel
-            # SOLUÇÃO: Usar rede do container pai para conexão direta
+        except Exception as e:
+            logger.error(f"Cleanup failed: {e}")
+
+    def get_network_config(self):
+        """Get network configuration based on environment"""
+        if self.is_server_environment:
+            return {
+                "network_mode": "bridge",  # Explicit bridge mode
+                "publish_all_ports": False,
+                "host_ip": "0.0.0.0",  # Bind to all interfaces
+            }
+        else:
+            return {
+                "network_mode": "bridge",
+                "publish_all_ports": False,
+                "host_ip": "127.0.0.1",  # Local only
+            }
+
+    def start_instance(self):
+        """Start MySQL with server-optimized settings"""
+        # Pre-flight checks
+        if not self.check_docker_access():
+            raise Exception("Docker daemon not accessible")
+
+        # Find available port
+        self.port = self.find_available_port()
+        logger.info(f"Using port: {self.port}")
+
+        # Cleanup existing containers
+        self.cleanup_existing_containers()
+
+        client = docker.from_env()
+        network_config = self.get_network_config()
+
+        logger.info("Starting MySQL container...")
+
+        # Server-optimized MySQL configuration
+        environment = {
+            "MYSQL_ROOT_PASSWORD": self.root_password,
+            "MYSQL_DATABASE": self.db_name,
+            "MYSQL_ROOT_HOST": "%",
+            "MYSQL_INITDB_SKIP_TZINFO": "1",
+            # Server optimizations
+            "MYSQL_INNODB_BUFFER_POOL_SIZE": "128M",
+            "MYSQL_INNODB_LOG_FILE_SIZE": "32M",
+            "MYSQL_INNODB_FLUSH_LOG_AT_TRX_COMMIT": "2",
+            "MYSQL_SYNC_BINLOG": "0",
+        }
+
+        # Configure volumes only if needed
+        volumes = {}
+        if os.path.exists("my.cnf"):
+            volumes[f"{os.path.abspath('my.cnf')}"] = {
+                "bind": "/etc/mysql/conf.d/my.cnf",
+                "mode": "ro",
+            }
+
+        try:
             self.container = client.containers.run(
-                "mysql:8",
-                name="mysql-test-instance",
-                environment={
-                    "MYSQL_ROOT_PASSWORD": self.root_password,
-                    "MYSQL_DATABASE": self.db_name,
-                    "MYSQL_ROOT_HOST": "%",  # Permitir conexões de qualquer host
-                    "MYSQL_INITDB_SKIP_TZINFO": "1",  # Evitar problemas de timezone
-                },
-                # MUDANÇA CRÍTICA: Usar rede do container host
-                network_mode="container:" + self._get_current_container_id(),
+                "mysql:8.0",  # Specific version for consistency
+                name=f"mysql-test-{int(time.time())}",  # Unique name
+                environment=environment,
+                ports={"3306/tcp": (network_config["host_ip"], self.port)},
                 volumes=volumes,
                 detach=True,
                 remove=True,
-                # Configurações adicionais para estabilidade
-                mem_limit="512m",  # Limitar memória
+                network_mode=network_config["network_mode"],
+                # Server memory limits
+                mem_limit="512m" if self.is_server_environment else None,
+                # Restart policy
                 restart_policy={"Name": "no"},
+                # Security options for servers
+                security_opt=["no-new-privileges"]
+                if self.is_server_environment
+                else None,
             )
 
-            # Com network container, MySQL fica acessível diretamente na porta 3306
-            self.assigned_port = 3306
+            # Wait for container to be running
+            logger.info("Waiting for container to start...")
+            time.sleep(5)
 
-            # Se porta foi automática, descobrir qual foi atribuída
-            print(f"MySQL configurado para porta {self.assigned_port}")
-            print(f"Container MySQL criado com ID: {self.container.id}")
-            print("Aguardando MySQL iniciar...")
+            self.container.reload()
+            logger.info(f"Container status: {self.container.status}")
+
+            if self.container.status != "running":
+                logs = self.container.logs().decode("utf-8")
+                logger.error(f"Container failed to start. Logs:\n{logs}")
+                raise Exception("Container failed to start")
+
+            # Wait for MySQL to be ready
             self.wait_for_mysql()
 
         except docker.errors.APIError as e:
-            print(f"Erro da API Docker: {e}")
-            if "Cannot connect to the Docker daemon" in str(e):
-                print("SOLUÇÃO: Monte o Docker socket no EasyPanel:")
-                print("Advanced → Mounts → /var/run/docker.sock:/var/run/docker.sock")
-            elif "port is already allocated" in str(e):
-                print("SOLUÇÃO: Porta em uso, tentando porta alternativa...")
-                self.assigned_port = None
-                return self.start_instance()  # Tentar novamente
-            raise
-        except Exception as e:
-            print(f"Erro geral: {e}")
-            raise
-
-    def _get_current_container_id(self):
-        """Obtém o ID do container atual (onde a API está rodando)."""
-        try:
-            # Método 1: Ler do cgroup (funciona na maioria dos casos)
-            with open("/proc/self/cgroup", "r") as f:
-                for line in f:
-                    if "docker" in line:
-                        container_id = line.strip().split("/")[-1]
-                        if len(container_id) == 64:  # ID completo do Docker
-                            return container_id
-                        elif len(container_id) >= 12:  # ID curto do Docker
-                            return container_id
-
-            # Método 2: Ler do mountinfo
-            with open("/proc/self/mountinfo", "r") as f:
-                for line in f:
-                    if "/docker/containers/" in line:
-                        container_id = line.split("/docker/containers/")[1].split("/")[
-                            0
-                        ]
-                        return container_id
-
-        except Exception as e:
-            print(f"Não foi possível detectar container ID: {e}")
-
-        # Fallback: usar hostname (geralmente é o container ID curto)
-        import socket
-
-        hostname = socket.gethostname()
-        if len(hostname) >= 12:
-            return hostname
-
-        # Último fallback: tentar obter via Docker API
-        try:
-            import subprocess
-
-            result = subprocess.run(["hostname"], capture_output=True, text=True)
-            return result.stdout.strip()
-        except:
-            return "unknown"
-
-    def start_instance_with_shared_network(self):
-        """Versão alternativa usando rede compartilhada com o container host."""
-        try:
-            client = docker.from_env()
-            print("Iniciando MySQL com rede compartilhada...")
-
-            # Limpar container existente
-            try:
-                existing_container = client.containers.get("mysql-test-instance")
-                existing_container.stop(timeout=10)
-                existing_container.remove()
-                time.sleep(3)
-            except docker.errors.NotFound:
-                pass
-
-            # Usar rede do container atual
-            current_container_id = self._get_current_container_id()
-            print(f"Container atual detectado: {current_container_id}")
-
-            self.container = client.containers.run(
-                "mysql:8",
-                name="mysql-test-instance",
-                environment={
-                    "MYSQL_ROOT_PASSWORD": self.root_password,
-                    "MYSQL_DATABASE": self.db_name,
-                    "MYSQL_ROOT_HOST": "%",
-                },
-                network_mode=f"container:{current_container_id}",
-                detach=True,
-                remove=True,
-                mem_limit="512m",
-            )
-
-            self.assigned_port = 3306  # Porta direta, sem mapeamento
-            print("MySQL iniciado com rede compartilhada na porta 3306")
-            self.wait_for_mysql()
-
-        except Exception as e:
-            print(f"Erro na rede compartilhada: {e}")
-            raise
-        """Verifica se uma porta está disponível."""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            result = sock.connect_ex(("localhost", 3306))
-            sock.close()
-            return result != 0
-        except:
-            return False
+            logger.error(f"Docker API error: {e}")
+            if "port is already allocated" in str(e):
+                logger.info("Port conflict, retrying with different port...")
+                self.port = self.find_available_port(self.port + 1)
+                self.start_instance()  # Retry
+            else:
+                raise
 
     def wait_for_mysql(self):
-        """Função para garantir que o MySQL esteja pronto para conexão - Versão melhorada."""
-        max_retries = 30  # Aumentar tentativas para ambientes mais lentos
-        retry_delay = 5
+        """Enhanced MySQL readiness check for servers"""
+        retries = 45  # More retries for server environments
+        connection_host = "localhost" if not self.is_server_environment else "127.0.0.1"
 
-        print(f"Aguardando MySQL na porta {self.assigned_port}...")
+        logger.info(f"Waiting for MySQL on {connection_host}:{self.port}")
 
-        for attempt in range(max_retries):
+        for attempt in range(retries):
             try:
-                # Verificar se container ainda está rodando
-                self.container.reload()
-                if self.container.status != "running":
-                    print(
-                        f"Container não está rodando. Status: {self.container.status}"
+                logger.info(f"Connection attempt {attempt + 1}/{retries}")
+
+                # Progressive connection strategy
+                if attempt < 10:
+                    # First attempts: basic connection without database
+                    test_conn = mysql.connector.connect(
+                        host=connection_host,
+                        port=self.port,
+                        user="root",
+                        password=self.root_password,
+                        connect_timeout=15,
+                        autocommit=True,
+                        charset="utf8mb4",
+                        use_unicode=True,
                     )
-                    # Mostrar logs para debug
-                    self._show_container_logs()
-                    raise Exception("Container MySQL parou de funcionar")
 
-                # Verificar se porta está respondendo
-                if not self._check_port_connection():
-                    raise Exception("Porta MySQL não está respondendo")
+                    cursor = test_conn.cursor()
+                    cursor.execute("SELECT 1")
+                    cursor.fetchall()
+                    cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{self.db_name}`")
+                    cursor.execute(f"USE `{self.db_name}`")
+                    cursor.close()
 
-                # Tentar conectar ao MySQL
-                print(f"Tentativa {attempt + 1}: Conectando ao MySQL...")
-                self.conn = mysql.connector.connect(
-                    host="localhost",
-                    port=self.assigned_port,
-                    user="root",
-                    password=self.root_password,
-                    database=self.db_name,
-                    connect_timeout=10,
-                    autocommit=True,
-                )
-                print("Conexão MySQL bem-sucedida!")
+                    self.conn = test_conn
+                else:
+                    # Later attempts: direct database connection
+                    self.conn = mysql.connector.connect(
+                        host=connection_host,
+                        port=self.port,
+                        user="root",
+                        password=self.root_password,
+                        database=self.db_name,
+                        connect_timeout=15,
+                        autocommit=True,
+                        charset="utf8mb4",
+                        use_unicode=True,
+                    )
+
+                logger.info("✅ MySQL connection successful!")
                 return
 
             except mysql.connector.Error as err:
-                print(f"Erro MySQL (tentativa {attempt + 1}): {err}")
+                logger.debug(f"MySQL error: {err}")
+
+                # Show container logs periodically
+                if attempt in [10, 20, 30]:
+                    self.show_container_diagnostics()
+
+                if attempt < retries - 1:
+                    time.sleep(3)
+
             except Exception as e:
-                print(f"Erro geral (tentativa {attempt + 1}): {e}")
+                logger.debug(f"General error: {e}")
+                if attempt < retries - 1:
+                    time.sleep(3)
 
-            if attempt < max_retries - 1:
-                print(f"Aguardando {retry_delay}s antes da próxima tentativa...")
-                time.sleep(retry_delay)
+        # Final diagnostics
+        logger.error("❌ Failed to connect to MySQL")
+        self.show_container_diagnostics()
+        raise Exception("Could not connect to MySQL after multiple attempts")
 
-        # Se chegou aqui, falhou
-        self._show_container_logs()
-        raise Exception("Não foi possível conectar ao MySQL após várias tentativas")
+    def show_container_diagnostics(self):
+        """Show detailed diagnostics for troubleshooting"""
+        if not self.container:
+            return
 
-    def _check_port_connection(self):
-        """Verifica se a porta MySQL está respondendo."""
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
-            result = sock.connect_ex(("localhost", self.assigned_port))
-            sock.close()
-            return result == 0
-        except:
-            return False
+            logger.info("=== CONTAINER DIAGNOSTICS ===")
+            self.container.reload()
+            logger.info(f"Status: {self.container.status}")
+            logger.info(f"Ports: {self.container.ports}")
 
-    def _show_container_logs(self):
-        """Mostra logs do container para debug."""
-        try:
-            if self.container:
-                logs = self.container.logs(tail=30).decode("utf-8", errors="ignore")
-                print("=== LOGS DO MYSQL ===")
-                print(logs)
-                print("=== FIM DOS LOGS ===")
+            # Show logs
+            logs = self.container.logs(tail=30).decode("utf-8")
+            logger.info(f"Recent logs:\n{logs}")
+
+            # Test port connectivity
+            try:
+                result = subprocess.run(
+                    ["nc", "-zv", "127.0.0.1", str(self.port)],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                logger.info(f"Port test: {result.stderr}")
+            except:
+                logger.info("Could not test port connectivity")
+
+            logger.info("=== END DIAGNOSTICS ===")
         except Exception as e:
-            print(f"Não foi possível obter logs: {e}")
+            logger.error(f"Diagnostics failed: {e}")
 
     def test_connection(self):
         if not self.conn:
-            raise Exception("Não há conexão com o banco de dados!")
+            raise Exception("No database connection!")
 
-        print("Testando conexão ao banco de dados...")
-        self.cursor = self.conn.cursor()
-        self.cursor.execute("SELECT 1;")
-        result = self.cursor.fetchall()
+        logger.info("Testing database connection...")
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT 1")
+        result = cursor.fetchall()
+        cursor.close()
         return result
 
     def delete_instance(self):
-        print("Finalizando instância MySQL...")
+        """Enhanced cleanup"""
+        logger.info("Cleaning up MySQL instance...")
 
+        # Close connections
         if self.cursor:
             try:
                 self.cursor.close()
-                print("Cursor fechado.")
             except:
                 pass
             self.cursor = None
@@ -315,212 +328,129 @@ class MySQLTestInstance:
         if self.conn:
             try:
                 self.conn.close()
-                print("Conexão MySQL fechada.")
             except:
                 pass
             self.conn = None
 
+        # Stop container
         if self.container:
             try:
-                print("Parando container MySQL...")
                 self.container.reload()
                 if self.container.status == "running":
+                    logger.info("Stopping container...")
                     self.container.stop(timeout=10)
-                    print("Container parado.")
-
-                # Container será removido automaticamente (remove=True)
+                time.sleep(2)  # Grace period
             except Exception as e:
-                print(f"Aviso ao parar container: {e}")
+                logger.warning(f"Error stopping container: {e}")
+                try:
+                    self.container.remove(force=True)
+                except:
+                    pass
 
             self.container = None
 
-    def execute_sql_statements(self, statements: list[str]):
+    def execute_sql_statements(self, statements):
         if not self.conn:
-            raise Exception("Não há conexão com o banco de dados!")
+            raise Exception("No database connection!")
 
-        self.cursor = self.conn.cursor()
-        for stmt in statements:
+        cursor = self.conn.cursor()
+        try:
+            for stmt in statements:
+                logger.info(f"Executing: {stmt[:100]}...")
+                cursor.execute(stmt)
+                if cursor.with_rows:
+                    cursor.fetchall()
+            self.conn.commit()
+        finally:
+            cursor.close()
+
+    def execute_raw_query(self, query):
+        logger.info(f"Executing query: {query[:100]}...")
+        if not self.conn:
+            raise Exception("No database connection!")
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(query)
             try:
-                print(f"Executando: {stmt[:50]}...")
-                self.cursor.execute(stmt)
-
-                if self.cursor.with_rows:
-                    self.cursor.fetchall()
-
-            except mysql.connector.Error as err:
-                print(f"Erro ao executar comando: {err}")
-                raise
-
-        self.conn.commit()
+                result = cursor.fetchall()
+                self.conn.commit()
+                return result
+            except mysql.connector.InterfaceError:
+                self.conn.commit()
+                return "Query executed successfully (no return data)"
+        finally:
+            cursor.close()
 
     def run_test(self):
-        """Executa o teste de criação, conexão e deleção da instância do MySQL."""
+        """Run complete test cycle"""
         try:
-            # Usar método seguro que tenta Docker-in-Docker e fallback
-            self.start_instance_safe()
-            # Testar a conexão
-            connection_test_result = self.test_connection()
-            return {"connection_test_result": connection_test_result}
+            self.start_instance()
+            result = self.test_connection()
+            return {
+                "connection_test_result": result,
+                "port": self.port,
+                "environment": "server" if self.is_server_environment else "local",
+            }
         finally:
-            # Deletar a instância após o teste
             self.delete_instance()
 
-    def execute_raw_query(self, query: str):
-        print(f"Executando: {query[:50]}...")
-        if not self.conn:
-            raise Exception("Sem conexão com o banco.")
 
-        self.cursor = self.conn.cursor()
-        self.cursor.execute(query)
-        try:
-            result = self.cursor.fetchall()
-            self.conn.commit()
-            return result
-        except mysql.connector.InterfaceError:
-            self.conn.commit()
-            return "Query executada com sucesso (sem retorno)"
+# Utility functions for server deployment
+def check_server_requirements():
+    """Check server requirements"""
+    logger.info("Checking server requirements...")
 
-    # Método alternativo SEM Docker-in-Docker para EasyPanel
-    def start_external_mysql(self, host="mysql-service", port=3306):
-        """Conecta a um MySQL externo (serviço separado no EasyPanel)."""
-        print("Usando MySQL externo ao invés de Docker-in-Docker...")
-        self.assigned_port = port
+    # Check Docker
+    try:
+        client = docker.from_env()
+        client.ping()
+        logger.info("✅ Docker OK")
+    except Exception as e:
+        logger.error(f"❌ Docker issue: {e}")
+        return False
 
-        # Tentar conectar diretamente ao MySQL externo
-        max_retries = 10
-        for attempt in range(max_retries):
-            try:
-                print(
-                    f"Tentativa {attempt + 1}: Conectando ao MySQL externo em {host}:{port}..."
-                )
-                self.conn = mysql.connector.connect(
-                    host=host,
-                    port=port,
-                    user="root",
-                    password=self.root_password,
-                    database=self.db_name,
-                    connect_timeout=10,
-                    autocommit=True,
-                )
-                print("Conexão MySQL externa bem-sucedida!")
-                return
-            except mysql.connector.Error as err:
-                print(f"Erro MySQL: {err}")
-                if attempt < max_retries - 1:
-                    time.sleep(5)
+    # Check available ports
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("0.0.0.0", 33306))
+        logger.info("✅ Ports available")
+    except Exception as e:
+        logger.error(f"❌ Port issue: {e}")
+        return False
 
-        raise Exception("Não foi possível conectar ao MySQL externo")
+    return True
 
-    def start_instance_safe(self):
-        """Método seguro que tenta várias estratégias."""
-        strategies = [
-            ("Rede compartilhada", self.start_instance_with_shared_network),
-            ("Docker-in-Docker tradicional", self.start_instance),
-            ("MySQL externo", self._try_external_mysql),
-        ]
 
-        for strategy_name, strategy_func in strategies:
-            try:
-                print(f"\n=== Tentando: {strategy_name} ===")
-                strategy_func()
-                print(f"✓ Sucesso com: {strategy_name}")
-                return
-            except Exception as e:
-                print(f"✗ {strategy_name} falhou: {e}")
+def cleanup_all_containers():
+    """Clean up all MySQL test containers"""
+    try:
+        client = docker.from_env()
+        containers = client.containers.list(all=True, filters={"name": "mysql-test"})
+        for container in containers:
+            logger.info(f"Removing: {container.name}")
+            if container.status == "running":
+                container.stop(timeout=5)
+            container.remove(force=True)
+        logger.info("Cleanup completed")
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
 
-        # Se todas falharam
-        self._show_final_instructions()
-        raise Exception("Todas as estratégias de conexão falharam")
 
-    def _try_external_mysql(self):
-        """Tenta conectar a vários hosts MySQL externos possíveis."""
-        mysql_hosts = [
-            ("localhost", 3306),
-            ("mysql", 3306),
-            ("database", 3306),
-            ("db", 3306),
-            ("mysql-service", 3306),
-            ("127.0.0.1", 3306),
-            ("127.0.0.1", 3307),
-        ]
+if __name__ == "__main__":
+    # Check requirements first
+    if not check_server_requirements():
+        logger.error("Server requirements not met!")
+        exit(1)
 
-        for host, port in mysql_hosts:
-            try:
-                print(f"Tentando MySQL externo: {host}:{port}")
-                self.start_external_mysql(host=host, port=port)
-                return
-            except Exception as e:
-                print(f"Host {host}:{port} falhou: {e}")
+    # Clean up first
+    cleanup_all_containers()
 
-        raise Exception("Nenhum MySQL externo encontrado")
-
-    def _show_final_instructions(self):
-        """Mostra instruções finais se tudo falhar."""
-        print("\n" + "=" * 60)
-        print("🚨 TODAS AS ESTRATÉGIAS FALHARAM!")
-        print("=" * 60)
-        print("\n📋 SOLUÇÕES PARA O EASYPANEL:")
-        print("\n1️⃣  OPÇÃO MAIS FÁCIL - MySQL como Serviço:")
-        print("   • No EasyPanel, crie uma nova App 'MySQL'")
-        print("   • Configure as variáveis:")
-        print(f"     MYSQL_ROOT_PASSWORD: {self.root_password}")
-        print(f"     MYSQL_DATABASE: {self.db_name}")
-        print("   • Depois use:")
-        print("     mysql_instance.start_external_mysql('nome-do-mysql-app')")
-        print("\n2️⃣  OPÇÃO DOCKER - Montar Socket:")
-        print("   • Edite sua aplicação no EasyPanel")
-        print("   • Advanced → Mounts → Adicione:")
-        print("     Host: /var/run/docker.sock")
-        print("     Container: /var/run/docker.sock")
-        print("     Type: bind")
-        print("   • Redeploy a aplicação")
-        print("\n3️⃣  OPÇÃO ALTERNATIVA - Use SQLite para testes:")
-        print("   • Para desenvolvimento/testes, considere SQLite")
-        print("=" * 60)
-
-        """Método alternativo caso o principal falhe."""
-        try:
-            client = docker.from_env()
-            print("Tentando método alternativo...")
-
-            # Usar configuração mínima
-            self.container = client.containers.run(
-                "mysql:8",
-                name=f"mysql-test-{int(time.time())}",  # Nome único
-                environment={
-                    "MYSQL_ROOT_PASSWORD": self.root_password,
-                    "MYSQL_DATABASE": self.db_name,
-                    "MYSQL_ROOT_HOST": "%",
-                },
-                ports={"3306/tcp": None},  # Porta automática
-                detach=True,
-                remove=True,
-            )
-
-            # Descobrir porta atribuída
-            self.container.reload()
-            port_info = self.container.attrs["NetworkSettings"]["Ports"]["3306/tcp"]
-            self.assigned_port = int(port_info[0]["HostPort"])
-
-            print(f"MySQL iniciado na porta {self.assigned_port} (método alternativo)")
-            self.wait_for_mysql()
-
-        except Exception as e:
-            print(f"Método alternativo também falhou: {e}")
-            raise
-
-    def get_container_info(self):
-        """Retorna informações do container para debug."""
-        if not self.container:
-            return "Nenhum container ativo"
-
-        try:
-            self.container.reload()
-            return {
-                "id": self.container.id,
-                "status": self.container.status,
-                "ports": self.container.ports,
-                "name": self.container.name,
-            }
-        except Exception as e:
-            return f"Erro ao obter info: {e}"
+    # Test
+    mysql_instance = MySQLTestInstance()
+    try:
+        result = mysql_instance.run_test()
+        logger.info(f"✅ Test successful: {result}")
+    except Exception as e:
+        logger.error(f"❌ Test failed: {e}")
+        raise
