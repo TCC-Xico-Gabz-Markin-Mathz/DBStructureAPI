@@ -59,31 +59,114 @@ class MySQLTestInstance:
         self.wait_for_mysql()
 
     def wait_for_mysql(self):
-        """Função para garantir que o MySQL esteja pronto para conexão"""
-        retries = 10
-        for i in range(retries):
+        """Procura o container MySQL e informa onde ele está, então conecta"""
+        client = docker.from_env()
+        retries = 15
+
+        print(f"Procurando container '{self.container_name}'...")
+
+        for attempt in range(retries):
             try:
-                # Check if container is running
-                self.container.reload()
-                if self.container.status != "running":
-                    print(f"Container status: {self.container.status}")
+                # Procurar o container
+                container = client.containers.get(self.container_name)
+
+                # Informações sobre onde o container está
+                print(f"✅ Container encontrado!")
+                print(f"📍 Status: {container.status}")
+                print(f"📍 ID: {container.short_id}")
+
+                # Pegar informações de rede
+                container.reload()  # Refresh das informações
+                network_settings = container.attrs["NetworkSettings"]
+
+                print(f"📍 IP interno: {network_settings.get('IPAddress', 'N/A')}")
+
+                # Pegar mapeamento de portas
+                ports = network_settings.get("Ports", {})
+                mysql_port_info = ports.get("3306/tcp", [])
+
+                if mysql_port_info:
+                    for port_mapping in mysql_port_info:
+                        host_ip = port_mapping.get("HostIp", "0.0.0.0")
+                        host_port = port_mapping.get("HostPort")
+                        print(
+                            f"📍 Porta mapeada: {host_ip}:{host_port} -> container:3306"
+                        )
+
+                # Verificar se o container está rodando
+                if container.status != "running":
+                    print(f"⚠️ Container não está rodando (status: {container.status})")
                     time.sleep(5)
                     continue
 
-                print(f"Tentativa {i + 1}/{retries} - Tentando conectar ao MySQL...")
-                self.conn = mysql.connector.connect(
-                    host="localhost",
-                    port=3307,
-                    user="root",
-                    password=self.root_password,
-                    database=self.db_name,
-                )
-                print("Conexão bem-sucedida!")
-                return
-            except mysql.connector.Error as err:
-                print(f"Erro ao conectar: {err}")
+                # Tentar conectar usando diferentes possibilidades
+                connection_configs = [
+                    # Tenta com localhost e porta mapeada
+                    {
+                        "host": "localhost",
+                        "port": 3307,
+                        "description": "localhost:3307 (porta mapeada)",
+                    },
+                    # Tenta com 127.0.0.1 e porta mapeada
+                    {
+                        "host": "127.0.0.1",
+                        "port": 3307,
+                        "description": "127.0.0.1:3307",
+                    },
+                    # Tenta com IP interno do container
+                    {
+                        "host": network_settings.get("IPAddress", "localhost"),
+                        "port": 3306,
+                        "description": f"IP interno {network_settings.get('IPAddress')}:3306",
+                    },
+                ]
+
+                for config in connection_configs:
+                    try:
+                        print(
+                            f"🔄 Tentativa {attempt + 1}/{retries} - Testando {config['description']}..."
+                        )
+
+                        self.conn = mysql.connector.connect(
+                            host=config["host"],
+                            port=config["port"],
+                            user="root",
+                            password=self.root_password,
+                            database=self.db_name,
+                            connection_timeout=10,
+                        )
+
+                        print(f"✅ Conexão bem-sucedida via {config['description']}!")
+                        return
+
+                    except mysql.connector.Error as err:
+                        print(f"❌ Falha em {config['description']}: {err}")
+                        continue
+
+                print("⏳ Todas as tentativas de conexão falharam, aguardando...")
                 time.sleep(10)
-        raise Exception("Não foi possível conectar ao MySQL após várias tentativas")
+
+            except docker.errors.NotFound:
+                print(f"❌ Container '{self.container_name}' não encontrado!")
+                print("🔍 Containers disponíveis:")
+
+                # Listar todos os containers
+                all_containers = client.containers.list(all=True)
+                for c in all_containers:
+                    status_emoji = "🟢" if c.status == "running" else "🔴"
+                    print(f"   {status_emoji} {c.name} ({c.status}) - {c.short_id}")
+
+                time.sleep(5)
+
+            except docker.errors.APIError as e:
+                print(f"❌ Erro na API Docker: {e}")
+                time.sleep(5)
+
+            except Exception as e:
+                print(f"❌ Erro inesperado: {e}")
+                time.sleep(5)
+
+        raise Exception(f"Não foi possível conectar ao MySQL após {retries} tentativas")
 
     def test_connection(self):
         if not self.conn:
