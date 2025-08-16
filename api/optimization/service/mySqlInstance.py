@@ -15,15 +15,31 @@ class MySQLTestInstance:
     def start_instance(self):
         """Inicia o container MySQL e aguarda o MySQL estar pronto."""
         client = docker.from_env()
+        print("Verificando se o container de teste já existe...")
+        try:
+            # Tenta encontrar e remover um container com o mesmo nome
+            existing_container = client.containers.get(self.container_name)
+            print(f"Container '{self.container_name}' encontrado. Removendo...")
+            existing_container.remove(force=True)
+            time.sleep(2)  # Pequena pausa para garantir a remoção
+        except docker.errors.NotFound:
+            print(
+                f"Nenhum container com o nome '{self.container_name}' encontrado. Prosseguindo..."
+            )
+        except docker.errors.APIError as e:
+            print(
+                f"Erro ao tentar remover o container: {e}. Prosseguindo com a criação..."
+            )
+
         print("Iniciando o container MySQL...")
         self.container = client.containers.run(
-            "mysql:8",  # Imagem do MySQL 8
-            name="mysql-test-instance",
+            "mysql:8",
+            name=self.container_name,  # Usa o nome da instância
             environment={
                 "MYSQL_ROOT_PASSWORD": self.root_password,
-                "MYSQL_DATABASE": self.db_name,  # Nome do banco de dados
+                "MYSQL_DATABASE": self.db_name,
             },
-            ports={"3306/tcp": 3307},  # Mapear a porta 3306
+            ports={"3306/tcp": 3307},
             volumes={
                 f"{os.path.abspath('my.cnf')}": {
                     "bind": "/etc/mysql/conf.d/my.cnf",
@@ -33,7 +49,6 @@ class MySQLTestInstance:
             detach=True,
             remove=True,
         )
-        # Espera para garantir que o MySQL esteja inicializado
         print("Aguardando MySQL iniciar...")
         self.wait_for_mysql()
 
@@ -42,11 +57,13 @@ class MySQLTestInstance:
         retries = 10
         for _ in range(retries):
             try:
-                # Tentativa de conectar ao MySQL
+                # Tenta conectar ao MySQL usando o nome do container como host
                 print("Tentando conectar ao MySQL...")
                 self.conn = mysql.connector.connect(
-                    host="localhost",
-                    port=3307,
+                    # Use o nome do container como o host
+                    host=self.container_name,
+                    # A porta interna do container é a 3306
+                    port=3306,
                     user="root",
                     password=self.root_password,
                     database=self.db_name,
@@ -55,8 +72,7 @@ class MySQLTestInstance:
                 return
             except mysql.connector.Error as err:
                 print(f"Erro ao conectar: {err}")
-                time.sleep(10)  # Espera de 5 segundos antes de tentar novamente
-
+                time.sleep(5)  # Espera de 5 segundos antes de tentar novamente
         raise Exception("Não foi possível conectar ao MySQL após várias tentativas")
 
     def test_connection(self):
