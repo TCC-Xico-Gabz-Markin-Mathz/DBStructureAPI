@@ -11,15 +11,23 @@ def convert_db_structure_to_string(db_structure):
             is_nullable = "não nulo" if not column["is_nullable"] else "nulo"
             is_primary_key = "chave primária" if column["is_primary_key"] else ""
             is_foreign_key = ""
+            is_autoincrement = ""
 
             if column["is_foreign_key"]:
                 is_foreign_key = f"referencia tabela {column['referenced_table']}, coluna {column['referenced_column']}"
+
+            # Verificando auto increment
+            if column.get("extra") and "auto_increment" in column["extra"].lower():
+                is_autoincrement = "auto increment"
 
             # Construindo a string para a coluna
             column_str = f"{column_name} - {column_type} - {is_nullable}"
 
             if is_primary_key:
                 column_str += f" - {is_primary_key}"
+
+            if is_autoincrement:
+                column_str += f" - {is_autoincrement}"
 
             if is_foreign_key:
                 column_str += f" - {is_foreign_key}"
@@ -50,12 +58,12 @@ def schema_to_create_tables(schema_obj):
         columns = table["columns"]
 
         # Inicia o comando CREATE TABLE
-        create_sql = f"CREATE TABLE {table_name} ("
+        create_sql = f"CREATE TABLE {table_name} (\n"
 
         # Lista para armazenar definições de colunas e constraints
         column_definitions = []
         foreign_keys = []
-        primary_keys = []
+        composite_primary_keys = []
 
         # Processa cada coluna
         for column in columns:
@@ -70,7 +78,16 @@ def schema_to_create_tables(schema_obj):
             referenced_column = column.get("referenced_column")
 
             # Monta a definição da coluna
-            col_def = f" {name} {col_type.upper()}"
+            col_def = f"    {name} {col_type.upper()}"
+
+            # Para primary key simples, adiciona inline
+            if is_primary_key:
+                # Verifica se é uma primary key composta (conta quantas colunas são PK)
+                pk_count = sum(1 for col in columns if col["is_primary_key"])
+                if pk_count == 1:
+                    col_def += " PRIMARY KEY"
+                else:
+                    composite_primary_keys.append(name)
 
             # Adiciona NOT NULL se necessário
             if not is_nullable:
@@ -89,29 +106,22 @@ def schema_to_create_tables(schema_obj):
 
             column_definitions.append(col_def)
 
-            # Coleta primary keys
-            if is_primary_key:
-                primary_keys.append(name)
-
             # Coleta foreign keys
             if is_foreign_key and referenced_table and referenced_column:
-                fk_constraint = f" FOREIGN KEY ({name}) REFERENCES {referenced_table}({referenced_column})"
+                fk_constraint = f"    FOREIGN KEY ({name}) REFERENCES {referenced_table}({referenced_column})"
                 foreign_keys.append(fk_constraint)
 
-        # Adiciona PRIMARY KEY constraint se houver
-        if primary_keys:
-            if len(primary_keys) == 1:
-                pk_constraint = f" PRIMARY KEY ({primary_keys[0]})"
-            else:
-                pk_constraint = f" PRIMARY KEY ({', '.join(primary_keys)})"
+        # Adiciona PRIMARY KEY constraint apenas se for composta
+        if composite_primary_keys:
+            pk_constraint = f"    PRIMARY KEY ({', '.join(composite_primary_keys)})"
             column_definitions.append(pk_constraint)
 
         # Adiciona FOREIGN KEY constraints
         column_definitions.extend(foreign_keys)
 
         # Finaliza o comando CREATE TABLE
-        create_sql += ",".join(column_definitions)
-        create_sql += ");"
+        create_sql += ",\n".join(column_definitions)
+        create_sql += "\n);"
 
         create_statements.append(create_sql)
 

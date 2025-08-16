@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 
 from api.common.services.rag import RAGClient
 from api.dependencies import get_mysql_instance, get_rag_client
+from api.optimization.helpers.formatResult import format_sql_commands
 from api.optimization.models.optimize import OptimizeQueryRequest
 from api.structure.helpers.mongoToString import (
     convert_db_structure_to_string,
@@ -125,5 +126,7 @@ def optimize_query(
         }
 
     except Exception as e:
-        mysql_instance.delete_instance()
         return {"erro": str(e)}
+
+    finally:
+        mysql_instance.delete_instance()
