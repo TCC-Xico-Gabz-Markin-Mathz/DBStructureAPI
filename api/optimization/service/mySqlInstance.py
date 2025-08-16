@@ -61,15 +61,19 @@ class MySQLTestInstance:
     def wait_for_mysql(self):
         """Função para garantir que o MySQL esteja pronto para conexão"""
         retries = 10
-        for _ in range(retries):
+        for i in range(retries):
             try:
-                # Tenta conectar ao MySQL usando o nome do container como host
-                print("Tentando conectar ao MySQL...")
+                # Check if container is running
+                self.container.reload()
+                if self.container.status != "running":
+                    print(f"Container status: {self.container.status}")
+                    time.sleep(5)
+                    continue
+
+                print(f"Tentativa {i + 1}/{retries} - Tentando conectar ao MySQL...")
                 self.conn = mysql.connector.connect(
-                    # Use o nome do container como o host
-                    host=self.container_name,
-                    # A porta interna do container é a 3306
-                    port=3306,
+                    host="localhost",
+                    port=3307,
                     user="root",
                     password=self.root_password,
                     database=self.db_name,
@@ -78,7 +82,7 @@ class MySQLTestInstance:
                 return
             except mysql.connector.Error as err:
                 print(f"Erro ao conectar: {err}")
-                time.sleep(5)  # Espera de 5 segundos antes de tentar novamente
+                time.sleep(10)
         raise Exception("Não foi possível conectar ao MySQL após várias tentativas")
 
     def test_connection(self):
