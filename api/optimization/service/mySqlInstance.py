@@ -5,9 +5,15 @@ import time
 
 
 class MySQLTestInstance:
-    def __init__(self, root_password="root123", db_name="testdb"):
+    def __init__(
+        self,
+        root_password="root123",
+        db_name="testdb",
+        container_name="mysql-test-instance",
+    ):
         self.db_name = db_name
         self.root_password = root_password
+        self.container_name = container_name
         self.container = None
         self.conn = None
         self.cursor = None
