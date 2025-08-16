@@ -21,7 +21,8 @@ def log_query_execution_times(exclude_connection_queries=True):
     cursor = mysql.connection.cursor()
 
     # Conectar ao MongoDB
-    mongo_client = MongoClient("mongodb://root:example@mongo:27017/")
+    uri = "mongodb://mongo:65c5294460aa71e75831@147.93.185.41:27017/teste?authSource=admin&tls=false"
+    mongo_client = MongoClient(uri)
     mongo_db = mongo_client["teste"]
     collection = mongo_db["queries"]
 
@@ -53,7 +54,13 @@ def log_query_execution_times(exclude_connection_queries=True):
 
                 # Ignorar queries de configuração como SET autocommit e SET NAMES
                 if exclude_connection_queries and sql_text.strip().upper().startswith(
-                    ("SET", "BEGIN", "COMMIT", "ROLLBACK")
+                    ("SET", "BEGIN", "COMMIT", "ROLLBACK", "SHOW", "CREATE")
+                ):
+                    continue
+
+                if (
+                    "information_schema" in sql_text.lower()
+                    or "connection_id" in sql_text.lower()
                 ):
                     continue
 
