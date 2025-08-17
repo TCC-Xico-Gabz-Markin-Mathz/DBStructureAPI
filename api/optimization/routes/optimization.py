@@ -1,4 +1,6 @@
+import time
 from fastapi import APIRouter, Depends, Query
+import requests
 
 from api.common.services.rag import RAGClient
 from api.dependencies import get_mysql_instance, get_rag_client
@@ -12,6 +14,51 @@ from api.structure.services.mongodb.getTables import get_db_structure
 
 
 router = APIRouter(prefix="/optimize", tags=["optimization"])
+
+
+def get_latest_select_log(mysql_instance):
+    """Pega o log SELECT mais recente do performance schema"""
+    pc = mysql_instance.execute_raw_query("""
+        SELECT 
+            SQL_TEXT, 
+            TIMER_WAIT / 1000000000000 AS EXECUTION_TIME_SECONDS,
+            TIMER_START,
+            NO_INDEX_USED,
+            NO_GOOD_INDEX_USED,
+            CPU_TIME,
+            MAX_TOTAL_MEMORY,
+            ROWS_SENT,
+            ROWS_EXAMINED
+        FROM 
+            performance_schema.events_statements_history
+        WHERE 
+            SQL_TEXT IS NOT NULL
+            AND UPPER(TRIM(SQL_TEXT)) LIKE 'SELECT%'
+        ORDER BY 
+            TIMER_START DESC
+        LIMIT 1;
+    """)
+
+    if pc and len(pc) > 0:
+        return pc[0]
+    return None
+
+
+def convert_metrics(log):
+    """Converte os dados do log para o formato esperado"""
+    if not log:
+        return {}
+
+    return {
+        "execution_time_seconds": float(log[1]) if log[1] is not None else None,
+        "timer_start": float(log[2]) if log[2] is not None else None,
+        "no_index_used": bool(log[3]) if log[3] is not None else None,
+        "no_good_index_used": bool(log[4]) if log[4] is not None else None,
+        "cpu_time": float(log[5]) if log[5] is not None else None,
+        "max_total_memory": float(log[6]) if log[6] is not None else None,
+        "rows_sent": int(log[7]) if log[7] is not None else None,
+        "rows_examined": int(log[8]) if log[8] is not None else None,
+    }
 
 
 @router.post("/")
@@ -45,79 +92,62 @@ def optimize_query(
         # 4. ask to rag and populate the db
         payload_populate = {
             "creation_commands": schema_to_create_tables(database_structure),
-            "number_insertions": 10,
+            "number_insertions": 50,
         }
         response_populate = rag_client.post("/optimizer/populate", payload_populate)
         populate_statements = format_sql_commands(response_populate)
         mysql_instance.execute_sql_statements(populate_statements)
 
-        # 5. execute the original query
+        # 5. execute the original query and capture its log
         result = mysql_instance.execute_raw_query(data.query)
         print("Resultado da query original:", result)
 
-        # 6. execute optimizations and optimized query
+        # Pequena pausa para garantir que o log seja persistido
+        time.sleep(0.5)
+
+        # Captura o log da query original
+        original_log = get_latest_select_log(mysql_instance)
+        original_metrics = convert_metrics(original_log)
+        original_query = original_log[0] if original_log else data.query
+
+        # 6. execute optimizations (índices)
         mysql_instance.execute_sql_statements(formatted_queries)
 
-        # 7. Compare logs
-        pc = mysql_instance.execute_raw_query("""
-            SELECT 
-                SQL_TEXT, 
-                TIMER_WAIT / 1000000000000 AS EXECUTION_TIME_SECONDS,
-                TIMER_START,
-                NO_INDEX_USED,
-                NO_GOOD_INDEX_USED,
-                CPU_TIME,
-                MAX_TOTAL_MEMORY,
-                ROWS_SENT,
-                ROWS_EXAMINED
-            FROM 
-                performance_schema.events_statements_history
-            WHERE 
-                SQL_TEXT IS NOT NULL
-            ORDER BY 
-                TIMER_START ASC;
-        """)
-        select_logs = [log for log in pc if log[0].strip().lower().startswith("select")]
+        # 7. execute the optimized query and capture its log
+        optimized_result = mysql_instance.execute_raw_query(data.query)
+        print("Resultado da query otimizada:", optimized_result)
 
-        if len(select_logs) >= 2:
-            original_log = select_logs[0]
-            optimized_log = select_logs[1]
+        # Pequena pausa para garantir que o log seja persistido
+        time.sleep(0.5)
 
-            def convert_metrics(log):
-                return {
-                    "execution_time_seconds": float(log[1])
-                    if log[1] is not None
-                    else None,
-                    "timer_start": float(log[2]) if log[2] is not None else None,
-                    "no_index_used": bool(log[3]) if log[3] is not None else None,
-                    "no_good_index_used": bool(log[4]) if log[4] is not None else None,
-                    "cpu_time": float(log[5]) if log[5] is not None else None,
-                    "max_total_memory": float(log[6]) if log[6] is not None else None,
-                    "rows_sent": int(log[7]) if log[7] is not None else None,
-                    "rows_examined": int(log[8]) if log[8] is not None else None,
-                }
-
-            original_metrics = convert_metrics(original_log)
-            optimized_metrics = convert_metrics(optimized_log)
-            original_query = original_log[0]
-            optimized_query = optimized_log[0]
-        else:
-            original_metrics = optimized_metrics = {}
-            original_query = optimized_query = ""
+        # Captura o log da query otimizada
+        optimized_log = get_latest_select_log(mysql_instance)
+        optimized_metrics = convert_metrics(optimized_log)
+        optimized_query = optimized_log[0] if optimized_log else data.query
 
         # 8. Analyse with RAG
-        response_analyze = rag_client.post(
-            "/optimizer/analyze",
-            {
-                "original_metrics": original_metrics,
-                "optimized_metrics": optimized_metrics,
-                "original_query": original_query,
-                "optimized_query": optimized_query,
-                "applied_indexes": formatted_queries
-                if isinstance(formatted_queries, list)
-                else [formatted_queries],
-            },
-        )
+        webhook_data = {
+            "original_metrics": original_metrics,
+            "optimized_metrics": optimized_metrics,
+            "original_query": original_query,
+            "optimized_query": optimized_query,
+            "applied_indexes": formatted_queries
+            if isinstance(formatted_queries, list)
+            else [formatted_queries],
+        }
+
+        response_analyze = rag_client.post("/optimizer/analyze", webhook_data)
+
+        try:
+            webhook_response = requests.post(
+                "https://tcc-n8n.6v8shu.easypanel.host/webhook/1e6343a0-6e0b-43c2-a301-0d3c0efb64f5",
+                json=webhook_data,
+                timeout=10,
+            )
+            print(f"Webhook enviado com sucesso: {webhook_response.status_code}")
+            print(f"Resposta: {webhook_response.text}")
+        except requests.exceptions.RequestException as e:
+            print(f"Erro ao enviar webhook: {str(e)}")
 
         return {
             "analyze": response_analyze,

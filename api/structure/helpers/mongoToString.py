@@ -1,43 +1,54 @@
+import json
+
+
 def convert_db_structure_to_string(db_structure):
-    result = []
+    """
+    Converte a estrutura do banco de dados para um dicionário Python
+    pronto para ser serializado em JSON.
+    """
+    output_tables = []
+
+    # Lista de chaves primárias para aprimorar a lógica de ordenação
+    primary_keys = {}
+    for table in db_structure["tables"]:
+        table_name = table["table_name"]
+        primary_keys[table_name] = [
+            col["name"] for col in table["columns"] if col.get("is_primary_key")
+        ]
 
     for table in db_structure["tables"]:
         table_name = table["table_name"]
-        columns_str = []
+        columns_data = []
 
         for column in table["columns"]:
-            column_name = column["name"]
-            column_type = column["type"]
-            is_nullable = "não nulo" if not column["is_nullable"] else "nulo"
-            is_primary_key = "chave primária" if column["is_primary_key"] else ""
-            is_foreign_key = ""
-            is_autoincrement = ""
+            column_info = {
+                "name": column["name"],
+                "type": column["type"],
+                "nullable": column["is_nullable"],
+            }
 
-            if column["is_foreign_key"]:
-                is_foreign_key = f"referencia tabela {column['referenced_table']}, coluna {column['referenced_column']}"
+            if column.get("is_primary_key"):
+                # Se for uma chave primária composta, o LLM vai precisar de todas as colunas
+                # para gerar a PRIMARY KEY (col1, col2)
+                if len(primary_keys[table_name]) > 1:
+                    column_info["is_composite_primary_key"] = True
+                else:
+                    column_info["is_primary_key"] = True
 
-            # Verificando auto increment
-            if column.get("extra") and "auto_increment" in column["extra"].lower():
-                is_autoincrement = "auto increment"
+            if "auto_increment" in column.get("extra", "").lower():
+                column_info["auto_increment"] = True
 
-            # Construindo a string para a coluna
-            column_str = f"{column_name} - {column_type} - {is_nullable}"
+            if column.get("is_foreign_key"):
+                column_info["foreign_key"] = {
+                    "referenced_table": column["referenced_table"],
+                    "referenced_column": column["referenced_column"],
+                }
 
-            if is_primary_key:
-                column_str += f" - {is_primary_key}"
+            columns_data.append(column_info)
 
-            if is_autoincrement:
-                column_str += f" - {is_autoincrement}"
+        output_tables.append({"table_name": table_name, "columns": columns_data})
 
-            if is_foreign_key:
-                column_str += f" - {is_foreign_key}"
-
-            columns_str.append(column_str)
-
-        # Adicionando a tabela e suas colunas ao resultado final
-        result.append(f"Tabela {table_name}\nColunas:\n" + "\n".join(columns_str))
-
-    return "\n\n".join(result)
+    return json.dumps({"tables": output_tables}, indent=2)
 
 
 def schema_to_create_tables(schema_obj):
