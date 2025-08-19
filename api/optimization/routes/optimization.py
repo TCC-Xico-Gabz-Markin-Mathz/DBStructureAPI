@@ -5,7 +5,8 @@ import requests
 from api.common.services.rag import RAGClient
 from api.dependencies import get_mysql_instance, get_rag_client
 from api.optimization.helpers.formatResult import format_sql_commands
-from api.optimization.models.optimize import OptimizeQueryRequest
+from api.optimization.models.optimize import ModelName, OptimizeQueryRequest
+from api.optimization.service.mySqlInstance import MySQLTestInstance
 from api.structure.helpers.mongoToString import (
     convert_db_structure_to_string,
     schema_to_create_tables,
@@ -14,6 +15,9 @@ from api.structure.services.mongodb.getTables import get_db_structure
 
 
 router = APIRouter(prefix="/optimize", tags=["optimization"])
+
+# Options are in the ModelName enum
+MODEL_NAME = ModelName.GROQ.value
 
 
 def get_latest_select_log(mysql_instance):
@@ -64,9 +68,10 @@ def convert_metrics(log):
 @router.post("/")
 def optimize_query(
     data: OptimizeQueryRequest,
-    rag_client: RAGClient = Depends(get_rag_client),
     db_id: str = Query(..., description="Database ID"),
-    mysql_instance=Depends(get_mysql_instance),
+    mysql_instance: MySQLTestInstance = Depends(get_mysql_instance),
+    model_name: ModelName = Query(MODEL_NAME, description="LLM Model Name"),
+    rag_client=Depends(get_rag_client),
 ):
     # Use db_id or fallback to default if None/empty to get structure
     actual_db_id = db_id or "65ff3a7b8f1e4b23d4a9c1d2"
@@ -75,12 +80,16 @@ def optimize_query(
 
     # 1. ask to rag to generate the optimization
     payload_generate = {"database_structure": string_structure, "query": data.query}
-    response_generate = rag_client.post("/optimizer/generate", payload_generate)
+    response_generate = rag_client.post(
+        "/optimizer/generate" + "?model_name=" + model_name, payload_generate
+    )
     formatted_queries = response_generate["result"]
 
     # 2. ask to rag to generate the command
     payload_create = {"database_structure": string_structure}
-    response_create = rag_client.post("/optimizer/create-database", payload_create)
+    response_create = rag_client.post(
+        "/optimizer/create-database" + "?model_name=" + model_name, payload_create
+    )
     create_statements = response_create["sql"]
 
     # 3. create the test instance
@@ -136,7 +145,9 @@ def optimize_query(
             else [formatted_queries],
         }
 
-        response_analyze = rag_client.post("/optimizer/analyze", webhook_data)
+        response_analyze = rag_client.post(
+            "/optimizer/analyze" + "?model_name=" + model_name, webhook_data
+        )
 
         try:
             webhook_response = requests.post(

@@ -1,3 +1,4 @@
+import os
 import pymongo
 
 
@@ -15,7 +16,10 @@ class MongoDB:
     @classmethod
     def _get_client(cls):
         if cls._client is None:
-            uri = "mongodb://mongo:65c5294460aa71e75831@147.93.185.41:27017/teste?authSource=admin&tls=false"
+            uri = os.getenv(
+                "MONGODB_URI",
+                "mongodb://root:example@localhost:27017/teste?authSource=admin&tls=false",
+            )
             cls._client = pymongo.MongoClient(uri)
             cls._database = cls._client["teste"]
         return cls._database
