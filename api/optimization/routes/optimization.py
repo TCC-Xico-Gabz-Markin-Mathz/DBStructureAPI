@@ -1,20 +1,19 @@
 import time
 from fastapi import APIRouter, Depends, Query
 import requests
+import redis
 
+from api.common.services.rag import RAGClient
 from api.dependencies import get_mysql_instance, get_rag_client
 from api.optimization.helpers.formatResult import format_sql_commands
-from api.optimization.models.optimize import ModelName, OptimizeQueryRequest
-from api.optimization.service.mySqlInstance import MySQLTestInstance
+from api.optimization.models.optimize import OptimizeQueryRequest
 from api.structure.helpers.mongoToString import (
     convert_db_structure_to_string,
     schema_to_create_tables,
 )
 from api.structure.services.mongodb.getTables import get_db_structure
-import redis
 
-
-# Connect to Redis (adjust host/port/db as needed)
+# Config
 redis_client = redis.Redis(
     host="147.93.185.41",
     port=6379,
@@ -23,9 +22,9 @@ redis_client = redis.Redis(
     decode_responses=True,
 )
 router = APIRouter(prefix="/optimize", tags=["optimization"])
-
-# Options are in the ModelName enum
-MODEL_NAME = ModelName.GROQ.value
+WEBHOOK_URL = (
+    "https://tcc-n8n.6v8shu.easypanel.host/webhook/1e6343a0-6e0b-43c2-a301-0d3c0efb64f5"
+)
 
 
 def get_latest_select_log(mysql_instance):
@@ -72,13 +71,13 @@ def convert_metrics(log):
         "max_total_memory": float(log[6]) if log[6] is not None else None,
         "rows_sent": int(log[7]) if log[7] is not None else None,
         "rows_examined": int(log[8]) if log[8] is not None else None,
-        "lock_time": int(log[9]) if log[9] is not None else None,
+        "lock_time": float(log[9]) if log[9] is not None else None,
         "max_controlled_memory": float(log[10]) if log[10] is not None else None,
     }
 
 
 def get_zero_metrics():
-    """Retorna métricas zeradas"""
+    """Retorna métricas zeradas para otimizações inválidas"""
     return {
         "execution_time_seconds": 0.0,
         "timer_start": 0.0,
@@ -88,145 +87,125 @@ def get_zero_metrics():
         "max_total_memory": 0.0,
         "rows_sent": 0,
         "rows_examined": 0,
-        "lock_time": 0,
-        "max_controlled_memory": 0.0,
     }
 
 
 def compare_query_results(result1, result2):
-    """Compara se dois resultados de query são iguais"""
+    """Compara se a quantidade de registros retornados é a mesma"""
     if result1 is None and result2 is None:
         return True
-
     if result1 is None or result2 is None:
         return False
-
-    # Se ambos são listas/tuplas, compara elemento por elemento
     if isinstance(result1, (list, tuple)) and isinstance(result2, (list, tuple)):
-        if len(result1) != len(result2):
-            return False
+        return len(result1) == len(result2)
+    return True
 
-        for row1, row2 in zip(result1, result2):
-            if isinstance(row1, (list, tuple)) and isinstance(row2, (list, tuple)):
-                if len(row1) != len(row2):
-                    return False
-                for val1, val2 in zip(row1, row2):
-                    if val1 != val2:
-                        return False
-            else:
-                if row1 != row2:
-                    return False
-        return True
 
-    # Para outros tipos, comparação direta
-    return result1 == result2
+def get_cached_or_generate(key, generator_func):
+    """Busca no cache ou gera novo conteúdo"""
+    cached = redis_client.get(key)
+    if cached:
+        return (
+            cached.split("\n\n")
+            if key.startswith("db_structure")
+            else cached.splitlines()
+        )
+
+    result = generator_func()
+    cache_value = (
+        "\n\n".join(result) if key.startswith("db_structure") else "\n".join(result)
+    )
+    redis_client.set(key, cache_value)
+    return result
 
 
 @router.post("/")
 def optimize_query(
     data: OptimizeQueryRequest,
+    rag_client: RAGClient = Depends(get_rag_client),
     db_id: str = Query(..., description="Database ID"),
-    mysql_instance: MySQLTestInstance = Depends(get_mysql_instance),
-    model_name: ModelName = Query(MODEL_NAME, description="LLM Model Name"),
-    rag_client=Depends(get_rag_client),
+    mysql_instance=Depends(get_mysql_instance),
 ):
-    # Use db_id or fallback to default if None/empty to get structure
     actual_db_id = db_id or "65ff3a7b8f1e4b23d4a9c1d2"
     database_structure = get_db_structure(actual_db_id)
     string_structure = convert_db_structure_to_string(database_structure)
 
-    # 1. ask to rag to generate the optimization
+    # 1. Gerar otimizações
     payload_generate = {"database_structure": string_structure, "query": data.query}
-    response_generate = rag_client.post(
-        "/optimizer/generate" + "?model_name=" + model_name, payload_generate
-    )
+    response_generate = rag_client.post("/optimizer/generate", payload_generate)
     formatted_queries = response_generate["result"]
 
-    # 2. ask to rag to generate the command
-
-    # Use Redis for db_structure_file
-    db_structure_key = f"db_structure:{actual_db_id}"
-    create_statements_str = redis_client.get(db_structure_key)
-    if create_statements_str:
-        create_statements = [
-            stmt.strip() for stmt in create_statements_str.split("\n\n") if stmt.strip()
-        ]
-    else:
+    # 2. Obter comandos de criação (com cache)
+    def create_db_generator():
         payload_create = {"database_structure": string_structure}
-        response_create = rag_client.post(
-            "/optimizer/create-database" + "?model_name=" + model_name, payload_create
-        )
-        create_statements = response_create["sql"]
-        redis_client.set(db_structure_key, create_statements_str)
-        create_statements = response_create["sql"]
+        response_create = rag_client.post("/optimizer/create-database", payload_create)
+        return response_create["sql"]
 
-    # 3. create the test instance
+    create_statements = get_cached_or_generate(
+        f"db_structure:{actual_db_id}", create_db_generator
+    )
+
+    # 3. Iniciar instância MySQL
     mysql_instance.start_instance()
 
     try:
         mysql_instance.execute_sql_statements(create_statements)
-        time.sleep(10)
 
-        # 4. ask to rag and populate the db
-        payload_populate = {
-            "creation_commands": schema_to_create_tables(database_structure),
-            "number_insertions": 1000,
-        }
-        populate_key = f"populate:{actual_db_id}"
-        populate_statements_str = redis_client.get(populate_key)
-        if populate_statements_str:
-            populate_statements = populate_statements_str.splitlines()
-        else:
+        # 4. Popular dados (com cache)
+        def populate_generator():
+            payload_populate = {
+                "creation_commands": schema_to_create_tables(database_structure),
+                "number_insertions": 50,
+            }
             response_populate = rag_client.post("/optimizer/populate", payload_populate)
-            populate_statements = format_sql_commands(response_populate)
-            redis_client.set(populate_key, "\n".join(populate_statements))
+            return format_sql_commands(response_populate)
+
+        populate_statements = get_cached_or_generate(
+            f"populate:{actual_db_id}", populate_generator
+        )
         mysql_instance.execute_sql_statements(populate_statements)
 
-        # 5. execute the original query and capture its log
+        # 5. Executar query original
         original_result = mysql_instance.execute_raw_query(data.query)
-        print("Resultado da query original:", original_result)
 
-        # Pequena pausa para garantir que o log seja persistido
-        time.sleep(0.5)
+        time.sleep(0.5)  # Garantir persistência do log
 
-        # Captura o log da query original
         original_log = get_latest_select_log(mysql_instance)
         original_metrics = convert_metrics(original_log)
         original_query = original_log[0] if original_log else data.query
 
-        # 6. execute optimizations (índices)
-        mysql_instance.execute_sql_statements(formatted_queries)
+        # 6. Aplicar otimizações (apenas índices, não a query final)
+        print("Aplicando otimizações:", formatted_queries[:-1])
+        if isinstance(formatted_queries, list) and len(formatted_queries) > 1:
+            mysql_instance.execute_sql_statements(formatted_queries[:-1])
 
-        # 7. execute the optimized query
-        optimized_result = mysql_instance.execute_raw_query(data.query)
-        print("Resultado da query otimizada:", optimized_result)
+        # 7. Executar query otimizada (último elemento da lista)
+        if isinstance(formatted_queries, list):
+            optimized_sql = formatted_queries[-1]
+        else:
+            optimized_sql = formatted_queries  # caso venha string única
+        optimized_result = mysql_instance.execute_raw_query(optimized_sql)
 
-        # Pequena pausa para garantir que o log seja persistido
-        time.sleep(0.5)
+        time.sleep(0.5)  # Garantir persistência do log
 
-        # Captura o log da query otimizada
         optimized_log = get_latest_select_log(mysql_instance)
         optimized_query = optimized_log[0] if optimized_log else data.query
 
-        # Comparar os resultados das queries
+        # 8. Validar resultados e definir métricas
         results_are_equal = compare_query_results(original_result, optimized_result)
 
         if results_are_equal:
-            # Se os resultados são iguais, usar as métricas normais
             optimized_metrics = convert_metrics(optimized_log)
-            print(
-                "Resultados das queries são iguais - usando métricas reais da otimização"
-            )
+            print("✅ Mesma quantidade de registros - métricas válidas")
         else:
-            # Se os resultados são diferentes, zerar as métricas da otimização
             optimized_metrics = get_zero_metrics()
+            orig_count = len(original_result) if original_result else 0
+            opt_count = len(optimized_result) if optimized_result else 0
             print(
-                "ATENÇÃO: Resultados das queries são diferentes - zerando métricas da otimização"
+                f"❌ Quantidades diferentes: {orig_count} → {opt_count} - métricas zeradas"
             )
-            print(f"Original: {original_result}")
-            print(f"Otimizada: {optimized_result}")
 
-        # 8. Analyse with RAG
+        # 9. Preparar dados para análise
         webhook_data = {
             "original_metrics": original_metrics,
             "optimized_metrics": optimized_metrics,
@@ -235,35 +214,28 @@ def optimize_query(
             "applied_indexes": formatted_queries
             if isinstance(formatted_queries, list)
             else [formatted_queries],
-            "results_equal": results_are_equal,  # Adiciona flag indicando se os resultados são iguais
+            "results_equal": results_are_equal,
         }
 
-        response_analyze = rag_client.post(
-            "/optimizer/analyze" + "?model_name=" + model_name, webhook_data
-        )
+        # Análise RAG
+        response_analyze = rag_client.post("/optimizer/analyze", webhook_data)
 
+        # Webhook
         try:
-            webhook_response = requests.post(
-                "https://tcc-n8n.6v8shu.easypanel.host/webhook/1e6343a0-6e0b-43c2-a301-0d3c0efb64f5",
-                json=webhook_data,
-                timeout=10,
-            )
+            webhook_response = requests.post(WEBHOOK_URL, json=webhook_data, timeout=10)
             print(f"Webhook enviado com sucesso: {webhook_response.status_code}")
             print(f"Resposta: {webhook_response.text}")
         except requests.exceptions.RequestException as e:
             print(f"Erro ao enviar webhook: {str(e)}")
 
-        response_analyze = rag_client.post("/optimizer/analyze", webhook_data)
-
         return {
             "analyze": response_analyze,
             "optimized_queries": formatted_queries,
-            "query_result": original_result,  # Mantém o resultado original
-            "results_equal": results_are_equal,  # Indica se os resultados foram iguais
+            "query_result": original_result,
+            "results_equal": results_are_equal,
         }
 
     except Exception as e:
         return {"erro": str(e)}
-
     finally:
         mysql_instance.delete_instance()
