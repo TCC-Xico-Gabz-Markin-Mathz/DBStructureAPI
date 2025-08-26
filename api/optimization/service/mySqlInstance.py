@@ -20,7 +20,7 @@ class MySQLTestInstance:
             old = client.containers.get("mysql-test-instance")
             print("Container antigo encontrado. Removendo...")
             old.stop()
-            time.sleep(10)
+            old.remove(force=True)
         except docker.errors.NotFound:
             pass  # não existia, segue tranquilo
 
@@ -41,6 +41,7 @@ class MySQLTestInstance:
             },
             detach=True,
             remove=True,
+            network="easypanel-tcc",
         )
         # Espera para garantir que o MySQL esteja inicializado
         print("Aguardando MySQL iniciar...")
@@ -54,8 +55,8 @@ class MySQLTestInstance:
                 # Tentativa de conectar ao MySQL
                 print("Tentando conectar ao MySQL...")
                 self.conn = mysql.connector.connect(
-                    host="localhost",
-                    port=3307,
+                    host="mysql-test-instance",
+                    port=3306,
                     user="root",
                     password=self.root_password,
                     database=self.db_name,

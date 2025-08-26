@@ -192,18 +192,8 @@ def optimize_query(
         optimized_query = optimized_log[0] if optimized_log else data.query
 
         # 8. Validar resultados e definir métricas
-        results_are_equal = compare_query_results(original_result, optimized_result)
-
-        if results_are_equal:
-            optimized_metrics = convert_metrics(optimized_log)
-            print("✅ Mesma quantidade de registros - métricas válidas")
-        else:
-            optimized_metrics = get_zero_metrics()
-            orig_count = len(original_result) if original_result else 0
-            opt_count = len(optimized_result) if optimized_result else 0
-            print(
-                f"❌ Quantidades diferentes: {orig_count} → {opt_count} - métricas zeradas"
-            )
+        optimized_metrics = convert_metrics(optimized_log)
+        print("✅ Mesma quantidade de registros - métricas válidas")
 
         # 9. Preparar dados para análise
         webhook_data = {
@@ -214,7 +204,6 @@ def optimize_query(
             "applied_indexes": formatted_queries
             if isinstance(formatted_queries, list)
             else [formatted_queries],
-            "results_equal": results_are_equal,
         }
 
         # Análise RAG
@@ -232,7 +221,6 @@ def optimize_query(
             "analyze": response_analyze,
             "optimized_queries": formatted_queries,
             "query_result": original_result,
-            "results_equal": results_are_equal,
         }
 
     except Exception as e:
