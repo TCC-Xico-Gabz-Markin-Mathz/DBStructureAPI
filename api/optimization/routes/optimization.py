@@ -193,7 +193,6 @@ def optimize_query(
 
         # 8. Validar resultados e definir métricas
         optimized_metrics = convert_metrics(optimized_log)
-        print("✅ Mesma quantidade de registros - métricas válidas")
 
         # 9. Preparar dados para análise
         webhook_data = {
@@ -206,9 +205,6 @@ def optimize_query(
             else [formatted_queries],
         }
 
-        # Análise RAG
-        response_analyze = rag_client.post("/optimizer/analyze", webhook_data)
-
         # Webhook
         try:
             webhook_response = requests.post(WEBHOOK_URL, json=webhook_data, timeout=10)
@@ -216,6 +212,9 @@ def optimize_query(
             print(f"Resposta: {webhook_response.text}")
         except requests.exceptions.RequestException as e:
             print(f"Erro ao enviar webhook: {str(e)}")
+
+        # Análise RAG
+        response_analyze = rag_client.post("/optimizer/analyze", webhook_data)
 
         return {
             "analyze": response_analyze,
