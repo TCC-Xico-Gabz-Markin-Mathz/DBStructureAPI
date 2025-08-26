@@ -24,16 +24,10 @@ class RAGClient:
             "Content-Type": "application/json",
         }
 
-    def post(self, route: str, body: dict, env: str = ""):
-        # Se env não for passado, tenta pegar do .env
-        if not env:
-            env = os.getenv("RAG_ENV", "")
-        env_path = f"/{env}" if env else ""
-        url = f"{self.base_url}{route}{env_path}" if env else f"{self.base_url}{route}"
+    def post(self, route: str, body: dict):
+        url = f"{self.base_url}{route}"
         response = requests.post(
-            url,
-            json=body,
-            headers=self.headers,
+            url + "?model_name=hermes", json=body, headers=self.headers
         )
 
         if response.status_code == 200:
