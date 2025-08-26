@@ -77,6 +77,51 @@ def convert_metrics(log):
     }
 
 
+def get_zero_metrics():
+    """Retorna métricas zeradas"""
+    return {
+        "execution_time_seconds": 0.0,
+        "timer_start": 0.0,
+        "no_index_used": False,
+        "no_good_index_used": False,
+        "cpu_time": 0.0,
+        "max_total_memory": 0.0,
+        "rows_sent": 0,
+        "rows_examined": 0,
+        "lock_time": 0,
+        "max_controlled_memory": 0.0,
+    }
+
+
+def compare_query_results(result1, result2):
+    """Compara se dois resultados de query são iguais"""
+    if result1 is None and result2 is None:
+        return True
+
+    if result1 is None or result2 is None:
+        return False
+
+    # Se ambos são listas/tuplas, compara elemento por elemento
+    if isinstance(result1, (list, tuple)) and isinstance(result2, (list, tuple)):
+        if len(result1) != len(result2):
+            return False
+
+        for row1, row2 in zip(result1, result2):
+            if isinstance(row1, (list, tuple)) and isinstance(row2, (list, tuple)):
+                if len(row1) != len(row2):
+                    return False
+                for val1, val2 in zip(row1, row2):
+                    if val1 != val2:
+                        return False
+            else:
+                if row1 != row2:
+                    return False
+        return True
+
+    # Para outros tipos, comparação direta
+    return result1 == result2
+
+
 @router.post("/")
 def optimize_query(
     data: OptimizeQueryRequest,
@@ -138,8 +183,8 @@ def optimize_query(
         mysql_instance.execute_sql_statements(populate_statements)
 
         # 5. execute the original query and capture its log
-        result = mysql_instance.execute_raw_query(data.query)
-        print("Resultado da query original:", result)
+        original_result = mysql_instance.execute_raw_query(data.query)
+        print("Resultado da query original:", original_result)
 
         # Pequena pausa para garantir que o log seja persistido
         time.sleep(0.5)
@@ -152,13 +197,34 @@ def optimize_query(
         # 6. execute optimizations (índices)
         mysql_instance.execute_sql_statements(formatted_queries)
 
+        # 7. execute the optimized query
+        optimized_result = mysql_instance.execute_raw_query(data.query)
+        print("Resultado da query otimizada:", optimized_result)
+
         # Pequena pausa para garantir que o log seja persistido
         time.sleep(0.5)
 
         # Captura o log da query otimizada
         optimized_log = get_latest_select_log(mysql_instance)
-        optimized_metrics = convert_metrics(optimized_log)
         optimized_query = optimized_log[0] if optimized_log else data.query
+
+        # Comparar os resultados das queries
+        results_are_equal = compare_query_results(original_result, optimized_result)
+
+        if results_are_equal:
+            # Se os resultados são iguais, usar as métricas normais
+            optimized_metrics = convert_metrics(optimized_log)
+            print(
+                "Resultados das queries são iguais - usando métricas reais da otimização"
+            )
+        else:
+            # Se os resultados são diferentes, zerar as métricas da otimização
+            optimized_metrics = get_zero_metrics()
+            print(
+                "ATENÇÃO: Resultados das queries são diferentes - zerando métricas da otimização"
+            )
+            print(f"Original: {original_result}")
+            print(f"Otimizada: {optimized_result}")
 
         # 8. Analyse with RAG
         webhook_data = {
@@ -169,6 +235,7 @@ def optimize_query(
             "applied_indexes": formatted_queries
             if isinstance(formatted_queries, list)
             else [formatted_queries],
+            "results_equal": results_are_equal,  # Adiciona flag indicando se os resultados são iguais
         }
 
         response_analyze = rag_client.post(
@@ -191,7 +258,8 @@ def optimize_query(
         return {
             "analyze": response_analyze,
             "optimized_queries": formatted_queries,
-            "query_result": result,
+            "query_result": original_result,  # Mantém o resultado original
+            "results_equal": results_are_equal,  # Indica se os resultados foram iguais
         }
 
     except Exception as e:
