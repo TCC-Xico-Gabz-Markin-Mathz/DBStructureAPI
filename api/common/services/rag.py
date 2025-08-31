@@ -24,10 +24,10 @@ class RAGClient:
             "Content-Type": "application/json",
         }
 
-    def post(self, route: str, body: dict):
-        url = f"{self.base_url}{route}"
+    def post(self, route: str, body: dict, model_name: str = "hermes"):
+        url = f"{self.base_url}{route}?model_name={model_name}"
         response = requests.post(
-            url + "?model_name=hermes", json=body, headers=self.headers
+            url, json=body, headers=self.headers
         )
 
         if response.status_code == 200:
