@@ -28,15 +28,15 @@ class OptimizationService:
         response = self.rag_client.post("/optimizer/generate", payload, model_name=model_name)
         return response["result"]
 
-    def _get_create_statements(self, db_id: str, string_structure: str, model_name: str) -> list:
+    def _get_create_statements(self, db_id: str, string_structure: str, model_name: str, use_cache: bool) -> list:
         """Obtém os comandos de criação do banco de dados (com cache)."""
         def generator():
             payload = {"database_structure": string_structure}
             response = self.rag_client.post("/optimizer/create-database", payload, model_name=model_name)
             return response["sql"]
-        return self.cache_service.get_cached_or_generate(f"db_structure:{db_id}", generator)
+        return self.cache_service.get_cached_or_generate(f"db_structure:{db_id}", generator, use_cache)
 
-    def _get_populate_statements(self, db_id: str, database_structure: dict, model_name: str) -> list:
+    def _get_populate_statements(self, db_id: str, database_structure: dict, model_name: str, use_cache: bool) -> list:
         """Obtém os comandos de população do banco de dados (com cache)."""
         def generator():
             payload = {
@@ -45,14 +45,14 @@ class OptimizationService:
             }
             response = self.rag_client.post("/optimizer/populate", payload, model_name=model_name)
             return format_sql_commands(response)
-        return self.cache_service.get_cached_or_generate(f"populate:{db_id}", generator)
+        return self.cache_service.get_cached_or_generate(f"populate:{db_id}", generator, use_cache)
 
-    def _prepare_database(self, db_id: str, string_structure: str, database_structure: dict, mysql_instance, model_name: str):
+    def _prepare_database(self, db_id: str, string_structure: str, database_structure: dict, mysql_instance, model_name: str, use_cache: bool):
         """Prepara o banco de dados de teste, criando e populando as tabelas."""
-        create_statements = self._get_create_statements(db_id, string_structure, model_name)
+        create_statements = self._get_create_statements(db_id, string_structure, model_name, use_cache)
         mysql_instance.execute_sql_statements(create_statements)
 
-        populate_statements = self._get_populate_statements(db_id, database_structure, model_name)
+        populate_statements = self._get_populate_statements(db_id, database_structure, model_name, use_cache)
         mysql_instance.execute_sql_statements(populate_statements)
 
     def _execute_and_collect_metrics(self, query: str, mysql_instance) -> tuple:
@@ -74,7 +74,7 @@ class OptimizationService:
         return self.rag_client.post("/optimizer/analyze", webhook_data, model_name=model_name)
 
 
-    def optimize_query_flow(self, db_id: str, query: str, mysql_instance, model_name: str = "hermes"):
+    def optimize_query_flow(self, db_id: str, query: str, mysql_instance, model_name: str = "hermes", use_cache: bool = True):
         actual_db_id = db_id or self.default_db_id
         
         database_structure = get_db_structure(actual_db_id)
@@ -84,7 +84,7 @@ class OptimizationService:
 
         mysql_instance.start_instance()
         try:
-            self._prepare_database(actual_db_id, string_structure, database_structure, mysql_instance, model_name)
+            self._prepare_database(actual_db_id, string_structure, database_structure, mysql_instance, model_name, use_cache)
 
             original_result, original_metrics, original_query = self._execute_and_collect_metrics(query, mysql_instance)
 

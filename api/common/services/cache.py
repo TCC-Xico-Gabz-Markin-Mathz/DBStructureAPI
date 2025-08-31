@@ -10,8 +10,11 @@ class CacheService:
             decode_responses=True,
         )
 
-    def get_cached_or_generate(self, key, generator_func):
-        """Busca no cache ou gera novo conteúdo"""
+    def get_cached_or_generate(self, key, generator_func, use_cache: bool = True):
+        """Busca no cache ou gera novo conteúdo, com a opção de ignorar o cache."""
+        if not use_cache:
+            return generator_func()
+
         cached = self.redis_client.get(key)
         if cached:
             return (
