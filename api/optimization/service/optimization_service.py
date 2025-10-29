@@ -41,7 +41,7 @@ class OptimizationService:
         def generator():
             payload = {
                 "creation_commands": schema_to_create_tables(database_structure),
-                "number_insertions": 50,
+                "number_insertions": 100000,
             }
             response = self.rag_client.post("/optimizer/populate", payload, model_name=model_name)
             return format_sql_commands(response)
